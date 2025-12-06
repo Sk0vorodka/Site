@@ -1,7 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
-// Убедитесь, что эта строка удалена, если она была: // const fetch = require('node-fetch');
+// Убедитесь, что эта строка удалена: // const fetch = require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -10,7 +10,12 @@ const PORT = process.env.PORT || 10000;
 const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE'; 
 const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
-// Хранилище для активных ботов
+// --- НАСТРОЙКИ ПРОКСИ ---
+// 🟢 ИСПОЛЬЗУЕМ ВАШ ДОМЕН ДЛЯ ОБХОДА БЛОКИРОВКИ ATernos
+const PROXY_HOST = 'router.comss.one'; 
+const PROXY_PORT = 1080; 
+// --- КОНЕЦ НАСТРОЕК ПРОКСИ ---
+
 const activeBots = {};
 
 // --- КОНФИГУРАЦИЯ EXPRESS ---
@@ -66,22 +71,25 @@ function cleanupBot(chatId) {
 // --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
 
 function setupMineflayerBot(chatId, host, port, username) {
-    // Если бот уже запущен, сначала останавливаем его
     if (activeBots[chatId] && activeBots[chatId].bot) {
-        // Причина 'disconnect.cleanup' используется, чтобы не отправлять уведомление об остановке
         activeBots[chatId].bot.quit('disconnect.cleanup'); 
-        // cleanupBot будет вызван обработчиком 'end'
     }
     
-    // 🟢 ОБХОД DNS-КЭША: ЯВНО УКАЗЫВАЕМ ВЕРСИЮ и используем ТОЛЬКО IP
+    // 🟢 НАСТРОЙКА MINEFLAYER С ПРОКСИ
     const bot = mineflayer.createBot({
-        host: host, // 51.158.231.208
-        port: parseInt(port), // 17484
+        host: host, 
+        port: parseInt(port), 
         username: username,
-        version: '1.20.1' // <--- КРИТИЧЕСКИ ВАЖНО УКАЗАТЬ ВЕРСИЮ СЕРВЕРА
+        version: '1.20.1', 
+        
+        // --- ПАРАМЕТРЫ ПРОКСИ ---
+        proxy: {
+            host: PROXY_HOST,
+            port: PROXY_PORT,
+            type: 5 // SOCKS5
+        }
     });
 
-    // Временно сохраняем данные, чтобы использовать их в обработчиках
     activeBots[chatId] = { bot, host, port, username, reconnectAttempts: 0 };
     const maxAttempts = 5;
 
@@ -98,7 +106,6 @@ function setupMineflayerBot(chatId, host, port, username) {
         console.error(`[Chat ${chatId}] Ошибка бота: ${errorMessage}`);
         sendNotification(chatId, `❌ Критическая ошибка: \\*${errorMessage}\\*`);
         
-        // Завершаем процесс, чтобы обработчик 'end' инициировал переподключение
         if (activeBots[chatId] && activeBots[chatId].bot) {
              activeBots[chatId].bot.quit('disconnect.error'); 
         }
@@ -107,27 +114,23 @@ function setupMineflayerBot(chatId, host, port, username) {
     bot.on('end', (reason) => {
         console.log(`[Chat ${chatId}] Бот отключен. Причина: ${reason}`);
         
-        // 1. Ручная остановка пользователем
         if (reason === 'disconnect.quitting') {
             sendNotification(chatId, `⏹ Бот остановлен по команде.`);
             cleanupBot(chatId);
             return; 
         }
         
-        // 2. Очистка сессии (при новой команде START)
         if (reason === 'disconnect.cleanup') {
             cleanupBot(chatId);
-            return; // Не отправляем уведомление об остановке
+            return; 
         }
         
-        // 3. Непредвиденное отключение (попытка переподключения)
         if (activeBots[chatId] && activeBots[chatId].reconnectAttempts < maxAttempts) {
             activeBots[chatId].reconnectAttempts++;
             sendNotification(chatId, `⚠️ Бот был отключен \\(${reason}\\)\\. Попытка переподключения \\(${activeBots[chatId].reconnectAttempts}/${maxAttempts}\\)\\.`);
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
-                // Рекурсивный вызов для создания нового экземпляра
                 setupMineflayerBot(chatId, host, port, username); 
             }, 5000 * activeBots[chatId].reconnectAttempts); 
         } else {
@@ -172,7 +175,6 @@ app.post('/api/stop', (req, res) => {
     }
 
     if (activeBots[chatId] && activeBots[chatId].bot) {
-        // Используем 'disconnect.quitting' для обозначения ручной остановки
         activeBots[chatId].bot.quit('disconnect.quitting'); 
         res.status(200).send({ message: "Bot stop command sent." });
     } else {
