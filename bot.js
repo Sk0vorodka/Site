@@ -26,7 +26,7 @@ let mcBotInstance = null; // Для хранения текущего экзем
 // Настройки для подключения к серверу Minecraft
 const botOptions = {
   host: mcHost,  // Используем переменную окружения
-  port: 24730,  // Порт по умолчанию для Aternos
+  port: 17484,  // Порт по умолчанию для Aternos
   username: 'BotUrolz',  // Имя бота 
   version: false  // Автоматический выбор версии Minecraft
 };
@@ -167,4 +167,5 @@ bot.onText(/Ab1R/, (msg) => {
   } else {
     bot.sendMessage(msg.chat.id, 'Minecraft бот уже запущен.');
   }
+
 });
