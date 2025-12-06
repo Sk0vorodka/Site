@@ -4,24 +4,22 @@ const TelegramBot = require('node-telegram-bot-api');
 // --- Переменные окружения для Render ---
 const telegramToken = process.env.TELEGRAM_TOKEN;
 const chatId = process.env.CHAT_ID;
-const port = process.env.PORT || 80; // Порт для Webhook, предоставляемый Render
-const url = process.env.RENDER_EXTERNAL_HOSTNAME; // Адрес сервиса Render
+const port = process.env.PORT || 80; 
+const url = process.env.RENDER_EXTERNAL_HOSTNAME;
 
 if (!telegramToken || !chatId || !url) {
-  console.error('ОШИБКА: Не заданы необходимые переменные окружения: TELEGRAM_TOKEN, CHAT_ID, или RENDER_EXTERNAL_HOSTNAME. Убедитесь, что Web Service активен.');
+  console.error('ОШИБКА: Не заданы необходимые переменные окружения: TELEGRAM_TOKEN, CHAT_ID, или RENDER_EXTERNAL_HOSTNAME.');
   process.exit(1);
 }
 
 // --- Инициализация Telegram бота с Webhooks ---
 const bot = new TelegramBot(telegramToken, { 
-    polling: false // Отключаем Polling
+    polling: false
 });
 
 // Установка Webhook: Telegram будет отправлять обновления на этот адрес
 bot.setWebHook(`https://${url}/bot${telegramToken}`, { allowed_updates: ["message", "callback_query"] });
 
-// Запуск прослушивания HTTP-запросов от Telegram
-bot.openWebHook();
 
 // --- Глобальное состояние бота ---
 let isBotStarted = false;
@@ -30,6 +28,14 @@ let currentHost = null;
 let currentPort = null;
 let botUsername = 'BotUrolz'; 
 let awaitingUsername = false; 
+
+// --- Функция для экранирования специальных символов Markdown ---
+function escapeMarkdown(text) {
+    if (!text) return '';
+    // Экранируем символы, которые могут сломать Markdown V1:
+    // _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
+    return text.replace(/([_*\[\]()~`>#+=|{}.!-])/g, '\\$1');
+}
 
 // --- Инлайн-клавиатура для управления ---
 function getMainMenuKeyboard() {
@@ -108,7 +114,11 @@ function createMinecraftBot() {
   let afkIntervalId = null; 
 
   mcBot.on('login', () => {
-    bot.sendMessage(chatId, `✅ Бот **${botUsername}** подключился: ${currentHost}:${currentPort}`, { parse_mode: 'Markdown' });
+    // Экранирование для сообщения о подключении
+    const escapedBotUsername = escapeMarkdown(botUsername);
+    const escapedHost = escapeMarkdown(currentHost);
+    
+    bot.sendMessage(chatId, `✅ Бот **${escapedBotUsername}** подключился: ${escapedHost}:${currentPort}`, { parse_mode: 'Markdown' });
     reconnectAttempts = 0;
 
     if (!afkIntervalId) {
@@ -183,7 +193,10 @@ function handleStartBot(msg) {
     }
 
     if (!isBotStarted) {
-        bot.sendMessage(msg.chat.id, `Запускаю Minecraft бота **${botUsername}**...`, { parse_mode: 'Markdown' });
+        // Экранирование имени для сообщения о запуске
+        const escapedBotUsername = escapeMarkdown(botUsername);
+        
+        bot.sendMessage(msg.chat.id, `Запускаю Minecraft бота **${escapedBotUsername}**...`, { parse_mode: 'Markdown' });
         createMinecraftBot();
         isBotStarted = true;
 
@@ -210,9 +223,13 @@ bot.onText(/\/start|\/menu/, (msg) => {
     }
     
     let statusText = isBotStarted ? '🟢 Подключен' : '🔴 Отключен';
-    let serverText = currentHost ? `${currentHost}:${currentPort}` : 'Не задан';
+    
+    // Экранирование для отображения в меню
+    let escapedHost = escapeMarkdown(currentHost);
+    let escapedBotUsername = escapeMarkdown(botUsername);
+    let serverText = currentHost ? `${escapedHost}:${currentPort}` : 'Не задан'; 
 
-    const messageText = `⚙️ **Панель управления ботом**\n\nСтатус: **${statusText}**\nСервер: **${serverText}**\nИмя бота: **${botUsername}**`;
+    const messageText = `⚙️ **Панель управления ботом**\n\nСтатус: **${statusText}**\nСервер: **${serverText}**\nИмя бота: **${escapedBotUsername}**`;
     
     bot.sendMessage(chatId, messageText, { 
         parse_mode: 'Markdown', 
@@ -260,7 +277,10 @@ bot.onText(/\/setserver (.+)/, (msg, match) => {
         currentHost = parts[0].trim();
         currentPort = parseInt(parts[1].trim(), 10);
         
-        bot.sendMessage(chatId, `✅ Сервер установлен: **${currentHost}:${currentPort}**.\nЗапустите бота через /menu.`, { parse_mode: 'Markdown' });
+        // Экранирование для сообщения об установке сервера
+        const escapedHost = escapeMarkdown(currentHost);
+        
+        bot.sendMessage(chatId, `✅ Сервер установлен: **${escapedHost}:${currentPort}**.\nЗапустите бота через /menu.`, { parse_mode: 'Markdown' });
         
         if (isBotStarted && mcBotInstance) {
             handleStopBot(msg);
@@ -289,18 +309,20 @@ bot.on('message', (msg) => {
         botUsername = newUsername;
         awaitingUsername = false;
         
+        // Экранирование имени для сообщения об изменении
+        const escapedBotUsername = escapeMarkdown(botUsername);
+        
         if (isBotStarted && mcBotInstance) {
             handleStopBot(msg);
-            bot.sendMessage(chatId, `✅ Имя бота успешно изменено на **${botUsername}**. Бот был остановлен. Запустите его снова через /menu.`, { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, `✅ Имя бота успешно изменено на **${escapedBotUsername}**. Бот был остановлен. Запустите его снова через /menu.`, { parse_mode: 'Markdown' });
         } else {
-            bot.sendMessage(chatId, `✅ Имя бота успешно изменено на **${botUsername}**.\nЗапустите бота через /menu.`, { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, `✅ Имя бота успешно изменено на **${escapedBotUsername}**.\nЗапустите бота через /menu.`, { parse_mode: 'Markdown' });
         }
     }
 });
 
-// ... (Вся основная логика Mineflayer и Telegram бота до этого места остается прежней)
-
 // 5. Обработчик для прослушивания порта Webhook
+// ВНИМАНИЕ: Это исправленный блок для парсинга JSON
 require('http').createServer((req, res) => {
   if (req.method === 'POST') {
     let body = '';
@@ -321,9 +343,10 @@ require('http').createServer((req, res) => {
         
         res.end('OK');
       } catch (error) {
-        console.error('Ошибка парсинга JSON или обработки запроса:', error);
-        res.statusCode = 500;
-        res.end('Error processing request');
+        // Ловим ошибки, чтобы сервер не падал, даже если что-то пошло не так
+        console.error('Ошибка парсинга JSON или обработки запроса:', error.message);
+        res.statusCode = 200; // Всегда возвращаем 200, чтобы Telegram не переотправлял хук
+        res.end('OK');
       }
     });
   } else {
