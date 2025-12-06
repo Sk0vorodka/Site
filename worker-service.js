@@ -3,7 +3,23 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
 // Импортируем fetch, чтобы исправить "fetch is not a function"
-const fetch = require('node-fetch'); 
+// В самом начале файла:
+// (Удалите старую строку: const fetch = require('node-fetch');)
+// ...
+
+// Измените функцию sendNotification так:
+async function sendNotification(chatId, message) {
+    // Динамический импорт fetch, чтобы он работал с v3
+    const { default: fetch } = await import('node-fetch'); 
+
+    if (!TELEGRAM_TOKEN) {
+        console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
+        return;
+    }
+    
+    // ... (остальной код sendNotification остается прежним)
+    // ...
+}
 
 const app = express();
 const PORT = process.env.PORT || 10000; // Render требует использования PORT из env
