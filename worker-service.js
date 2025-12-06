@@ -11,7 +11,7 @@ const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE';
 const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // --- НАСТРОЙКИ ПРОКСИ ---
-// 🟢 ИСПОЛЬЗУЕМ ВАШ ДОМЕН ДЛЯ ОБХОДА БЛОКИРОВКИ ATernos
+// Используем ваш домен для обхода блокировки Aternos
 const PROXY_HOST = 'router.comss.one'; 
 const PROXY_PORT = 1080; 
 // --- КОНЕЦ НАСТРОЕК ПРОКСИ ---
@@ -22,13 +22,13 @@ const activeBots = {};
 app.use(bodyParser.json());
 
 app.get('/', (req, res) => {
-    res.send('Worker API is running. Use /api/start or /api/stop.');
+    res.send('Worker API is running. Use /api/start, /api/stop, or /api/command.');
 });
 
 // --- ФУНКЦИИ УВЕДОМЛЕНИЙ ---
 
 async function sendNotification(chatId, message) {
-    // 🟢 ИСПРАВЛЕНИЕ: Динамический импорт для node-fetch v3
+    // Динамический импорт для node-fetch v3
     try {
         const { default: fetch } = await import('node-fetch'); 
 
@@ -54,6 +54,7 @@ async function sendNotification(chatId, message) {
         });
         
         if (!response.ok) {
+            // Если ошибка 400, это может быть неверное форматирование MarkdownV2
             console.error(`[Chat ${chatId}] Ошибка отправки уведомления: ${response.status} ${response.statusText}`);
         }
     } catch (e) {
@@ -75,14 +76,13 @@ function setupMineflayerBot(chatId, host, port, username) {
         activeBots[chatId].bot.quit('disconnect.cleanup'); 
     }
     
-    // 🟢 НАСТРОЙКА MINEFLAYER С ПРОКСИ
+    // НАСТРОЙКА MINEFLAYER С ПРОКСИ
     const bot = mineflayer.createBot({
         host: host, 
         port: parseInt(port), 
         username: username,
         version: '1.20.1', 
         
-        // --- ПАРАМЕТРЫ ПРОКСИ ---
         proxy: {
             host: PROXY_HOST,
             port: PROXY_PORT,
@@ -98,7 +98,11 @@ function setupMineflayerBot(chatId, host, port, username) {
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
         sendNotification(chatId, `✅ Бот \\*${username}\\* успешно подключился к \\*${host}:${port}\\*`);
-        activeBots[chatId].reconnectAttempts = 0; 
+        
+        // 🟢 ИСПРАВЛЕНИЕ КРИТИЧЕСКОЙ ОШИБКИ: Проверка на существование объекта перед записью
+        if (activeBots[chatId]) {
+            activeBots[chatId].reconnectAttempts = 0; 
+        }
     });
 
     bot.on('error', (err) => {
@@ -141,6 +145,7 @@ function setupMineflayerBot(chatId, host, port, username) {
     
     bot.on('spawn', () => {
         console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
+        sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`);
     });
 }
 
@@ -180,6 +185,64 @@ app.post('/api/stop', (req, res) => {
     } else {
         cleanupBot(chatId);
         res.status(200).send({ message: "Bot is already stopped or not running." });
+    }
+});
+
+
+// /api/command
+app.post('/api/command', (req, res) => {
+    const { chatId, command, data } = req.body;
+
+    if (!chatId || !command) {
+        return res.status(400).send({ error: "Missing parameters: chatId or command." });
+    }
+
+    const botEntry = activeBots[chatId];
+    if (!botEntry || !botEntry.bot) {
+        sendNotification(chatId, `❌ Ошибка: Бот не запущен\\. Сначала запустите его командой /start\\.`);
+        return res.status(404).send({ error: "Bot not running." });
+    }
+
+    try {
+        const bot = botEntry.bot;
+
+        switch (command) {
+            case 'CHAT':
+                if (data) {
+                    bot.chat(data);
+                    sendNotification(chatId, `💬 Сообщение отправлено в чат: \\*${data}\\*`);
+                }
+                break;
+            
+            case 'CONSOLE':
+                if (data && data.startsWith('/')) {
+                    // Команда /CONSOLE принимает полную команду (например, /op user)
+                    // Mineflayer отправляет ее как сообщение в чат, сервер ее выполняет
+                    bot.chat(data); 
+                    sendNotification(chatId, `⚙️ Команда отправлена на сервер: \`${data}\``);
+                } else {
+                    sendNotification(chatId, `❌ Ошибка: Команда CONSOLE должна начинаться со слэша (/)`);
+                }
+                break;
+
+            case 'MOVE_FORWARD':
+                // Пример простой команды движения
+                bot.setControlState('forward', true);
+                setTimeout(() => {
+                    bot.setControlState('forward', false);
+                }, 1000); 
+                sendNotification(chatId, `➡️ Бот двинулся вперед на 1 секунду\\.`);
+                break;
+
+            default:
+                sendNotification(chatId, `❓ Неизвестная команда: \\*${command}\\*`);
+        }
+
+        res.status(200).send({ message: `Command ${command} executed.` });
+    } catch (e) {
+        console.error(`[Chat ${chatId}] Ошибка выполнения команды ${command}: ${e.message}`);
+        sendNotification(chatId, `❌ Ошибка при выполнении команды \\*${command}\\*: ${e.message}`);
+        res.status(500).send({ error: e.message });
     }
 });
 
