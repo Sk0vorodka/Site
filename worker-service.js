@@ -37,7 +37,7 @@ async function sendNotification(chatId, message) {
             return;
         }
         
-        // 🟢 ИСПРАВЛЕНИЕ: Полное экранирование всех спецсимволов MarkdownV2
+        // 1. Попытка отправить с MarkdownV2 (с полным экранированием)
         // Экранируем: _ * [ ] ( ) ~ ` > # + - = | { } . !
         const escapedMessage = message.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 
@@ -48,23 +48,30 @@ async function sendNotification(chatId, message) {
             parse_mode: 'MarkdownV2'
         };
 
-        const response = await fetch(url, {
+        let response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         
+        // 2. ЗАПАСНОЙ ВАРИАНТ: Если MarkdownV2 не прошел (ошибка 400), отправляем чистый текст
+        if (!response.ok && response.status === 400) {
+            console.warn(`[Chat ${chatId}] Ошибка MarkdownV2, отправляю обычный текст.`);
+            const plainPayload = {
+                chat_id: chatId,
+                text: `[RAW] ${message}` // Отправляем оригинальное сообщение без форматирования
+            };
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(plainPayload)
+            });
+        }
+
         if (!response.ok) {
             console.error(`[Chat ${chatId}] Ошибка отправки уведомления: ${response.status} ${response.statusText}`);
-            // Можно попробовать отправить без MarkdownV2 в случае ошибки, чтобы видеть хоть что-то
-            if (response.status === 400) {
-                 await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: chatId, text: `[Ошибка форматирования] ${message}` })
-                });
-            }
         }
+
     } catch (e) {
         console.error(`[Chat ${chatId}] Критическая ошибка сети при отправке уведомления: ${e.message}`);
     }
@@ -105,7 +112,6 @@ function setupMineflayerBot(chatId, host, port, username) {
 
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
-        // Убрал лишние * чтобы избежать проблем с экранированием, если экранирование все еще сбоит
         sendNotification(chatId, `✅ Бот ${username} успешно подключился к ${host}:${port}`);
         
         // Проверка на существование объекта перед сбросом счетчика
@@ -212,7 +218,6 @@ app.post('/api/command', (req, res) => {
             
             case 'CONSOLE':
                 if (data && data.startsWith('/')) {
-                    // Команда /op, /time, /teleport и т.д.
                     bot.chat(data); 
                     sendNotification(chatId, `⚙️ Команда отправлена на сервер: ${data}`);
                 } else {
