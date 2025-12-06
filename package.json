@@ -1,13 +1,13 @@
 {
-  "name": "aternos-telegram-bot",
+  "name": "mineflayer-worker-service",
   "version": "1.0.0",
-  "description": "Minecraft bot controlled via Telegram",
-  "main": "bot.js",
+  "main": "worker-service.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node worker-service.js"
   },
   "dependencies": {
-    "mineflayer": "^4.10.0",
-    "node-telegram-bot-api": "^0.61.0"
+    "express": "^4.19.2",
+    "mineflayer": "^4.20.0",
+    "node-fetch": "^3.3.2"
   }
 }
