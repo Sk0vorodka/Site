@@ -1,28 +1,26 @@
 const mineflayer = require('mineflayer');
 const TelegramBot = require('node-telegram-bot-api');
 
-// --- Переменные окружения для Render ---
+// --- Переменные окружения для Render (Только для доступа!) ---
+// Мы оставляем здесь только токен и chat_id, чтобы бот мог работать и отправлять уведомления
 const telegramToken = process.env.TELEGRAM_TOKEN;
 const chatId = process.env.CHAT_ID;
-const mcHost = process.env.MC_HOST;
 
-if (!telegramToken || !chatId || !mcHost) {
-  console.error('ОШИБКА: Не заданы необходимые переменные окружения: TELEGRAM_TOKEN, CHAT_ID, или MC_HOST.');
+if (!telegramToken || !chatId) {
+  console.error('ОШИБКА: Не заданы необходимые переменные окружения: TELEGRAM_TOKEN или CHAT_ID.');
   process.exit(1);
 }
 
 const bot = new TelegramBot(telegramToken, { polling: true });
 
+// --- Переменные для хранения настроек сервера ---
 let isBotStarted = false;
 let mcBotInstance = null;
+let currentHost = null;
+let currentPort = null;
+const botUsername = 'BotUrolz'; // Имя бота остается постоянным
 
-const botOptions = {
-  host: mcHost,
-  port: 17484, // Ваш порт
-  username: 'BotUrolz',
-  version: false
-};
-
+// Переменные для управления переподключением
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 100;
 const reconnectInterval = 30000;
@@ -35,11 +33,10 @@ setInterval(() => {
 
 // Функция для Anti-AFK
 function performRandomAction(mcBot) {
-  // Защита от сбоя: проверяем, что mcBot существует
   if (!mcBot) {
     return;
   }
-  
+  // ... (логика Anti-AFK остается прежней)
   const actions = ['jump', 'move', 'rotate'];
   const action = actions[Math.floor(Math.random() * actions.length)];
 
@@ -58,17 +55,31 @@ function performRandomAction(mcBot) {
   }
 }
 
-// Функция создания Minecraft бота
+
+// Функция создания Minecraft бота (теперь использует глобальные переменные)
 function createMinecraftBot() {
   if (reconnectAttempts >= maxReconnectAttempts) {
-    console.log('Превышено количество попыток подключения.');
     bot.sendMessage(chatId, 'Превышено количество попыток подключения к Minecraft-серверу. Бот остановлен.');
     return;
+  }
+  
+  // Проверка, установлены ли хост и порт
+  if (!currentHost || !currentPort) {
+      bot.sendMessage(chatId, '❌ Не задан адрес сервера. Используйте команду /setserver.');
+      isBotStarted = false;
+      return;
   }
 
   if (mcBotInstance) {
       mcBotInstance.quit();
   }
+
+  const botOptions = {
+    host: currentHost,
+    port: currentPort,
+    username: botUsername, 
+    version: false
+  };
 
   const mcBot = mineflayer.createBot(botOptions);
   mcBotInstance = mcBot;
@@ -76,10 +87,10 @@ function createMinecraftBot() {
 
   mcBot.on('login', () => {
     console.log(`Minecraft бот подключился к серверу.`);
-    bot.sendMessage(chatId, `✅ Minecraft бот подключился к серверу: ${mcHost}:${botOptions.port}`);
+    bot.sendMessage(chatId, `✅ Бот подключился: ${currentHost}:${currentPort}`);
     reconnectAttempts = 0;
 
-    // Запускаем Anti-AFK только после успешного входа
+    // Запускаем Anti-AFK
     if (!afkIntervalId) {
       afkIntervalId = setInterval(() => {
           performRandomAction(mcBot);
@@ -94,10 +105,9 @@ function createMinecraftBot() {
 
   mcBot.on('end', (reason) => {
     console.log(`Minecraft бот отключен. Причина: ${reason}`);
-    bot.sendMessage(chatId, `❌ Minecraft бот был отключен (${reason}). Попытка переподключения.`);
+    bot.sendMessage(chatId, `❌ Бот был отключен (${reason}). Попытка переподключения.`);
     reconnectAttempts++;
 
-    // Очищаем Anti-AFK при отключении
     if (afkIntervalId) {
         clearInterval(afkIntervalId);
         afkIntervalId = null;
@@ -108,6 +118,7 @@ function createMinecraftBot() {
     } else {
       console.log('Достигнуто максимальное количество попыток подключения.');
       bot.sendMessage(chatId, '❗️ Достигнуто максимальное количество попыток подключения. Бот остановлен.');
+      isBotStarted = false;
     }
   });
 
@@ -117,11 +128,9 @@ function createMinecraftBot() {
   });
 
   mcBot.on('death', () => {
-    console.log('Бот умер. Респавн через 5 секунд...');
     bot.sendMessage(chatId, '💀 Бот умер. Респавн...');
     setTimeout(() => {
       mcBot.respawn();
-      console.log('Бот респавнится.');
     }, 5000);
   });
   
@@ -134,7 +143,6 @@ function createMinecraftBot() {
       }
     }
     if (botCount > 1) {
-      console.log('Обнаружен другой бот с тем же именем. Отключаюсь.');
       mcBot.quit();
       bot.sendMessage(chatId, '🚫 Обнаружен другой бот с тем же именем. Отключаюсь.');
     }
@@ -143,16 +151,55 @@ function createMinecraftBot() {
 
 // --- Обработка команд Telegram ---
 
+// 1. Команда для установки сервера
+bot.onText(/\/setserver (.+)/, (msg, match) => {
+    if (String(msg.chat.id) !== chatId) return;
+
+    const fullAddress = match[1].trim();
+    const parts = fullAddress.split(':');
+    
+    if (parts.length === 2 && parts[1].match(/^\d+$/)) {
+        currentHost = parts[0].trim();
+        currentPort = parseInt(parts[1].trim(), 10);
+        
+        bot.sendMessage(chatId, `✅ Сервер установлен: **${currentHost}:${currentPort}**.\nТеперь вы можете запустить бота командой /start.`, { parse_mode: 'Markdown' });
+        
+        // Если бот уже был запущен, перезапускаем его с новыми данными
+        if (isBotStarted) {
+            if (mcBotInstance) mcBotInstance.quit();
+            isBotStarted = false;
+            bot.sendMessage(chatId, '🔄 Перезапускаю бота с новыми настройками...');
+            // Запуск произойдет через команду Ab1R, которую нужно будет отправить повторно
+        }
+
+    } else {
+        bot.sendMessage(chatId, '❌ Неверный формат. Используйте: `/setserver домен:порт` (например: `/setserver test.aternos.me:17484`)', { parse_mode: 'Markdown' });
+    }
+});
+
+// 2. Команда /start
 bot.onText(/\/start/, (msg) => {
   if (String(msg.chat.id) !== chatId) {
       bot.sendMessage(msg.chat.id, '❌ У вас нет прав для управления этим ботом.');
       return;
   }
-  bot.sendMessage(msg.chat.id, 'Привет! Введите специальный код для запуска Minecraft бота.');
+  
+  if (!currentHost || !currentPort) {
+      bot.sendMessage(chatId, '⚠️ Сначала задайте адрес сервера, используя команду: `/setserver домен:порт`', { parse_mode: 'Markdown' });
+      return;
+  }
+  
+  bot.sendMessage(msg.chat.id, 'Введите специальный код для запуска Minecraft бота.');
 });
 
+// 3. Команда Ab1R (запуск)
 bot.onText(/Ab1R/, (msg) => {
   if (String(msg.chat.id) !== chatId) return;
+  
+  if (!currentHost || !currentPort) {
+       bot.sendMessage(chatId, '⚠️ Сначала задайте адрес сервера, используя команду: `/setserver домен:порт`', { parse_mode: 'Markdown' });
+      return;
+  }
 
   if (!isBotStarted) {
     bot.sendMessage(msg.chat.id, 'Код правильный. Запускаю Minecraft бота...');
@@ -161,7 +208,9 @@ bot.onText(/Ab1R/, (msg) => {
 
     // Таймер для отправки статуса каждые 60 минут
     setInterval(() => {
-      bot.sendMessage(chatId, 'Minecraft бот работает нормально.');
+      if (isBotStarted) {
+        bot.sendMessage(chatId, 'Minecraft бот работает нормально.');
+      }
     }, 60 * 60 * 1000);
   } else {
     bot.sendMessage(msg.chat.id, 'Minecraft бот уже запущен.');
