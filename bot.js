@@ -298,14 +298,41 @@ bot.on('message', (msg) => {
     }
 });
 
+// ... (Вся основная логика Mineflayer и Telegram бота до этого места остается прежней)
+
 // 5. Обработчик для прослушивания порта Webhook
 require('http').createServer((req, res) => {
-  bot.processUpdate(req.body); // Обрабатываем входящие Webhook'и
-  res.end('OK');
-}).listen(port);
+  if (req.method === 'POST') {
+    let body = '';
+    
+    // 1. Сборка тела запроса (потока данных)
+    req.on('data', chunk => {
+        body += chunk.toString();
+    });
 
-// Выводим в лог, где Render должен слушать запросы
-console.log(`Сервер Webhook запущен и слушает порт ${port}`);
+    // 2. Обработка запроса после получения всех данных
+    req.on('end', () => {
+      try {
+        // Парсинг JSON-тела
+        const update = JSON.parse(body); 
+        
+        // Передача обработанного объекта в TelegramBot
+        bot.processUpdate(update);
+        
+        res.end('OK');
+      } catch (error) {
+        console.error('Ошибка парсинга JSON или обработки запроса:', error);
+        res.statusCode = 500;
+        res.end('Error processing request');
+      }
+    });
+  } else {
+    // Для GET-запросов (проверки статуса)
+    res.end('OK');
+  }
+}).listen(port, () => {
+    console.log(`Сервер Webhook запущен и слушает порт ${port}`);
+});
 
 // Очистка хука при остановке (помогает избежать конфликтов)
 process.on('SIGINT', () => {
