@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AternosBot</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f4f8;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            position: relative;
+        }
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        .container:hover {
+            transform: scale(1.02);
+        }
+        .logo {
+            margin-bottom: 10px;
+        }
+        .logo img {
+            width: 200px;
+            height: auto;
+        }
+        .sub-logo {
+            margin-bottom: 20px;
+            margin-top: -20px;
+        }
+        .sub-logo img {
+            width: 150px;
+            height: auto;
+        }
+        label {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 5px;
+            display: block;
+            text-align: left;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+            margin-bottom: 20px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 15px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .error {
+            color: red;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .success {
+            color: green;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .download-link {
+            display: none;
+            margin-top: 20px;
+        }
+        .download-link a {
+            text-decoration: none;
+            background-color: #28a745;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            display: inline-block;
+            margin-right: 10px;
+            transition: background-color 0.3s ease;
+        }
+        .download-link a:hover {
+            background-color: #218838;
+        }
+        .bottom-logo {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+        .bottom-logo img {
+            width: 80px;
+            height: auto;
+        }
+        .bottom-logo:hover {
+            transform: scale(1.1);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="logo">
+            <img src="ref/ater.gif" alt="Aternos Logo">
+        </div>
+        <div class="sub-logo">
+            <img src="ref/ater1.gif" alt="Sub Logo">
+        </div>
+
+        <label for="server-ip">Введите IP адрес сервера:</label>
+        <input type="text" id="server-ip" placeholder="Пример: f1.aurorix.net:28752" required>
+
+        <label for="bot-name">Введите имя бота (до 10 символов):</label>
+        <input type="text" id="bot-name" placeholder="Пример: BotName" maxlength="10" required>
+
+        <button id="generate-btn">Сгенерировать файлы</button>
+
+        <p class="error" id="error-msg">Пожалуйста, введите корректные данные.</p>
+        <p class="success" id="success-msg">Файлы успешно сгенерированы!</p>
+
+        <div class="download-link" id="download-link">
+            <a id="index-download" href="#">Скачать index.js</a>
+            <a id="package-download" href="#">Скачать package.json</a>
+        </div>
+    </div>
+
+    <div class="bottom-logo" onclick="window.open('https://aurorix.net/', '_blank');">
+        <img src="ref/logo.png" alt="Logo">
+    </div>
+
+    <script>
+        document.getElementById('generate-btn').addEventListener('click', async function () {
+            const serverIp = document.getElementById('server-ip').value;
+            const botName = document.getElementById('bot-name').value;
+            const errorMsg = document.getElementById('error-msg');
+            const successMsg = document.getElementById('success-msg');
+            const downloadLinkContainer = document.getElementById('download-link');
+            const indexDownloadLink = document.getElementById('index-download');
+            const packageDownloadLink = document.getElementById('package-download');
+
+            // Валидация данных
+            if (!serverIp || !botName || botName.length > 10) {
+                errorMsg.style.display = 'block';
+                successMsg.style.display = 'none';
+                return;
+            } else {
+                errorMsg.style.display = 'none';
+                successMsg.style.display = 'block'; // Показываем сообщение об успехе
+            }
+
+            // Разделение IP и порта
+            let [host, port = 25565] = serverIp.split(':');
+
+            // Генерация кода для index.js с избеганием воды и записью стартовых координат
+            const botCode = `
+                const mineflayer = require('mineflayer');
+                const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+                const { GoalNear } = goals;
+                const vec3 = require('vec3');
+
+                const botOptions = {
+                    host: '${host}',
+                    port: ${port},
+                    username: '${botName}',
+                };
+
+                const radius = 10;
+                let startPosition = null;
+                let reconnectAttempts = 0;
+                const maxReconnectAttempts = 1000;
+                const reconnectInterval = 20000;
+                const resetAttemptsInterval = 60 * 60 * 1000;
+                let currentBot = null;
+
+                function injectPathfinder(bot) {
+                    bot.loadPlugin(pathfinder);
+                }
+
+                setInterval(() => {
+                    reconnectAttempts = 0;
+                    console.log('Сброс количества попыток переподключения.');
+                }, resetAttemptsInterval);
+
+                function createBot() {
+                    if (reconnectAttempts >= maxReconnectAttempts) {
+                        console.log('Превышено количество попыток подключения.');
+                        return;
+                    }
+
+                    if (currentBot) {
+                        console.log('Закрытие текущего бота перед созданием нового.');
+                        currentBot.quit();
+                        currentBot = null;
+                    }
+
+                    console.log('Создание нового бота.');
+                    const bot = mineflayer.createBot(botOptions);
+                    currentBot = bot;
+                    injectPathfinder(bot);
+
+                    bot.once('spawn', () => {
+                        startPosition = bot.entity.position.clone();
+                        console.log('Бот заспавнился. Стартовая позиция сохранена.');
+                        startAntiAFK(bot);
+                    });
+
+                    bot.on('end', (reason) => {
+                        console.log(`Бот был отключен. Причина: ${reason}. Попытка переподключения: ${reconnectAttempts + 1}`);
+                        reconnectAttempts++;
+                        if (reconnectAttempts < maxReconnectAttempts) {
+                            console.log(`Попытка переподключения через ${reconnectInterval / 1000} секунд...`);
+                            setTimeout(createBot, reconnectInterval);
+                        } else {
+                            console.log('Достигнуто максимальное количество попыток переподключения.');
+                        }
+                    });
+
+                    bot.on('error', (err) => {
+                        console.error(`Ошибка подключения: ${err.message}. Попытка переподключения: ${reconnectAttempts + 1}`);
+                        reconnectAttempts++;
+                        if (reconnectAttempts < maxReconnectAttempts) {
+                            console.log(`Попытка переподключения через ${reconnectInterval / 1000} секунд...`);
+                            setTimeout(createBot, reconnectInterval);
+                        } else {
+                            console.log('Достигнуто максимальное количество попыток переподключения.');
+                        }
+                    });
+
+                    bot.on('death', () => {
+                        console.log('Бот умер. Респавн через 5 секунд.');
+                        setTimeout(() => {
+                            bot.respawn();
+                            console.log('Бот был респавнен.');
+                        }, 5000);
+                    });
+                }
+
+                function startAntiAFK(bot) {
+                    const movements = new Movements(bot, bot.registry);
+                    movements.allowSprinting = true;
+                    movements.canDig = false;
+                    movements.allow1by1towers = false;
+                    movements.scafoldingBlocks = [];
+                    movements.liquidCost = 100;
+
+                    bot.pathfinder.setMovements(movements);
+
+                    setInterval(() => {
+                        performRandomAction(bot);
+                    }, getRandomInt(5000, 15000));
+
+                    setInterval(() => {
+                        checkPositionAndReturn(bot);
+                    }, 5000);
+                }
+
+                function performRandomAction(bot) {
+                    const actions = [moveRandomly, rotateHead, swingArm, jump, moveAndRotate];
+                    const action = actions[getRandomInt(0, actions.length - 1)];
+                    action(bot);
+                }
+
+                function moveRandomly(bot) {
+                    if (!startPosition) return;
+                    const randomX = getRandomInt(-radius, radius);
+                    const randomZ = getRandomInt(-radius, radius);
+                    const goalPosition = startPosition.offset(randomX, 0, randomZ);
+
+                    const sprint = getRandomInt(0, 1) === 1;
+                    bot.setControlState('sprint', sprint);
+                    bot.pathfinder.setGoal(new GoalNear(goalPosition.x, goalPosition.y, goalPosition.z, 1));
+
+                    setTimeout(() => {
+                        bot.clearControlStates();
+                    }, getRandomInt(2000, 5000));
+                }
+
+                function rotateHead(bot) {
+                    const yaw = getRandomInt(-180, 180) * (Math.PI / 180);
+                    const pitch = getRandomInt(-90, 90) * (Math.PI / 180);
+                    bot.look(yaw, pitch, true);
+                }
+
+                function swingArm(bot) {
+                    bot.swingArm('right');
+                }
+
+                function jump(bot) {
+                    bot.setControlState('jump', true);
+                    setTimeout(() => {
+                        bot.setControlState('jump', false);
+                    }, 500);
+                }
+
+                function moveAndRotate(bot) {
+                    moveRandomly(bot);
+                    rotateHead(bot);
+                }
+
+                function checkPositionAndReturn(bot) {
+                    if (!startPosition) return;
+                    const distance = startPosition.distanceTo(bot.entity.position);
+                    if (distance > radius) {
+                        bot.pathfinder.setGoal(new GoalNear(startPosition.x, startPosition.y, startPosition.z, 1));
+
+                        setTimeout(() => {
+                            if (bot.entity.position.distanceTo(startPosition) > radius) {
+                                bot.entity.position.set(startPosition.x, startPosition.y, startPosition.z);
+                            }
+                        }, 10000);
+                    }
+                }
+
+                function getRandomInt(min, max) {
+                    return Math.floor(Math.random() * (max - min + 1)) + min;
+                }
+
+                createBot();
+
+
+            `;
+
+            // Генерация файла package.json с необходимыми зависимостями
+            const packageJson = JSON.stringify({
+                name: botName,
+                version: "1.0.0",
+                main: "index.js",
+                dependencies: {
+                    mineflayer: "^4.0.0",
+                    "mineflayer-pathfinder": "^2.4.0",
+                    vec3: "^0.1.7"
+                }
+            }, null, 2);
+
+            // Функция создания ссылки на скачивание
+            const createDownloadLink = (content, mimeType, filename) => {
+                const blob = new Blob([content], { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+            };
+
+            // Генерация файлов для скачивания
+            createDownloadLink(botCode, 'text/javascript', 'index.js');
+            createDownloadLink(packageJson, 'application/json', 'package.json');
+        });
+    </script>
+
+</body>
+</html>
