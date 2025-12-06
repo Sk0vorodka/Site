@@ -5,7 +5,7 @@ const mineflayer = require('mineflayer');
 
 // --- НАСТРОЙКИ ПРОКСИ ---
 // Новый рабочий SOCKS5-прокси
-const PROXY_HOST = '85.172.55.85'; 
+const PROXY_HOST = '95.78.119.94:1080'; 
 const PROXY_PORT = 1080; 
 // --- КОНЕЦ НАСТРОЕК ПРОКСИ ---
 
