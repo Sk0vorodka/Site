@@ -6,7 +6,7 @@ const telegramToken = process.env.TELEGRAM_TOKEN;
 const port = process.env.PORT || 80; 
 const url = process.env.RENDER_EXTERNAL_HOSTNAME;
 
-// Ваш CHAT_ID из переменных окружения теперь используется только для первичного идентификатора (если нужен)
+// Ваш CHAT_ID из переменных окружения
 const adminChatId = process.env.CHAT_ID; 
 
 if (!telegramToken || !url) {
@@ -19,38 +19,15 @@ const bot = new TelegramBot(telegramToken, {
     polling: false
 });
 
-// Установка Webhook: Telegram будет отправлять обновления на этот адрес
+// Установка Webhook
 bot.setWebHook(`https://${url}/bot${telegramToken}`, { allowed_updates: ["message", "callback_query"] });
 
 
 // --- Глобальное состояние для Multi-User ---
-/**
- * Хранит информацию о каждом боте:
- * Key: String (Chat ID пользователя)
- * Value: {
- * mcBot: Mineflayer Bot Instance,
- * host: String,
- * port: Number,
- * username: String,
- * awaitingUsername: Boolean,
- * reconnectAttempts: Number,
- * afkIntervalId: Interval ID
- * }
- */
 const activeBots = {};
-
-// Константы для переподключения
 const maxReconnectAttempts = 100;
 const reconnectInterval = 30000;
 const resetAttemptsInterval = 60 * 60 * 1000;
-
-// Сброс счетчика попыток для всех ботов раз в час
-setInterval(() => {
-  console.log('Сбрасываю количество попыток переподключения для всех активных ботов.');
-  for (const chatId in activeBots) {
-      activeBots[chatId].reconnectAttempts = 0;
-  }
-}, resetAttemptsInterval);
 
 
 // --- Хелпер для данных пользователя ---
@@ -65,34 +42,46 @@ function getUserBotData(chatId) {
             username: `Bot${chatKey.slice(-4)}`, // Генерируем уникальное имя
             awaitingUsername: false,
             reconnectAttempts: 0,
-            afkIntervalId: null
+            afkIntervalId: null,
+            statusIntervalId: null,
+            sendNotifications: true // NEW: Уведомления включены по умолчанию
         };
     }
     return activeBots[chatKey];
 }
 
 
+// Сброс счетчика попыток для всех ботов раз в час
+setInterval(() => {
+  console.log('Сбрасываю количество попыток переподключения для всех активных ботов.');
+  for (const chatId in activeBots) {
+      activeBots[chatId].reconnectAttempts = 0;
+  }
+}, resetAttemptsInterval);
+
+
 // --- Функция для экранирования специальных символов Markdown ---
 function escapeMarkdown(text) {
     if (!text) return '';
-    // Экранируем символы, которые могут сломать Markdown V1
     return text.replace(/([_*\[\]()~`>#+=|{}.!-])/g, '\\$1');
 }
 
 // --- Инлайн-клавиатура для управления ---
-function getMainMenuKeyboard(currentUsername) {
+function getMainMenuKeyboard(currentUsername, notificationsEnabled) {
+    const notifText = notificationsEnabled ? '🔕 Выключить уведомления' : '🔔 Включить уведомления';
     return {
         reply_markup: {
             inline_keyboard: [
                 [{ text: '▶️ Запустить бота', callback_data: 'start_bot' }, { text: '⏹ Выключить бота', callback_data: 'stop_bot' }],
                 [{ text: '⚙️ Сменить сервер (домен:порт)', callback_data: 'set_server_prompt' }],
-                [{ text: `👤 Сменить имя бота (Текущее: ${currentUsername})`, callback_data: 'set_username_prompt' }]
+                [{ text: `👤 Сменить имя бота (Текущее: ${currentUsername})`, callback_data: 'set_username_prompt' }],
+                [{ text: notifText, callback_data: 'toggle_notifications' }] // НОВАЯ КНОПКА
             ]
         }
     };
 }
 
-// --- Функции Mineflayer ---
+// --- Функции Mineflayer (Anti-AFK) ---
 
 function performRandomAction(mcBot) {
   if (!mcBot) return;
@@ -115,11 +104,45 @@ function performRandomAction(mcBot) {
   }
 }
 
+// --- ФУНКЦИИ УПРАВЛЕНИЯ БОТОМ (Исправлено) ---
+
+function handleStopBot(chatId) {
+    const data = getUserBotData(chatId);
+    
+    if (data.mcBot) {
+        // Защита от падений
+        if (typeof data.mcBot.quit === 'function') { 
+            data.mcBot.quit();
+        } else {
+            console.warn(`[Chat ID ${chatId}] data.mcBot существует, но не имеет метода quit(). Очистка ссылки.`);
+        }
+        data.mcBot = null;
+        
+        // Очистка всех интервалов
+        if (data.afkIntervalId) {
+            clearInterval(data.afkIntervalId);
+            data.afkIntervalId = null;
+        }
+        if (data.statusIntervalId) { 
+            clearInterval(data.statusIntervalId);
+            data.statusIntervalId = null;
+        }
+
+        if (data.sendNotifications) {
+            bot.sendMessage(chatId, '⏹ Minecraft бот безопасно остановлен и отключен от сервера.');
+        }
+    } else {
+        bot.sendMessage(chatId, 'Бот не запущен.');
+    }
+}
+
 function createMinecraftBot(chatId) {
   const data = getUserBotData(chatId);
   
   if (data.reconnectAttempts >= maxReconnectAttempts) {
-    bot.sendMessage(chatId, 'Превышено количество попыток подключения к Minecraft-серверу. Бот остановлен.');
+    if (data.sendNotifications) {
+        bot.sendMessage(chatId, 'Превышено количество попыток подключения к Minecraft-серверу. Бот остановлен.');
+    }
     data.mcBot = null;
     return;
   }
@@ -129,15 +152,8 @@ function createMinecraftBot(chatId) {
       return;
   }
 
-  // Если старый экземпляр еще есть, закрываем его
-  if (data.mcBot) {
-      data.mcBot.quit();
-      data.mcBot = null;
-      if (data.afkIntervalId) {
-          clearInterval(data.afkIntervalId);
-          data.afkIntervalId = null;
-      }
-  }
+  // Очистка старого экземпляра
+  handleStopBot(chatId); // Используем handleStopBot для безопасной очистки
 
   const botOptions = {
     host: data.host,
@@ -146,86 +162,104 @@ function createMinecraftBot(chatId) {
     version: false
   };
 
-  const mcBot = mineflayer.createBot(botOptions);
-  data.mcBot = mcBot;
+  try {
+      const mcBot = mineflayer.createBot(botOptions);
+      data.mcBot = mcBot;
 
-  mcBot.on('login', () => {
-    const escapedUsername = escapeMarkdown(data.username);
-    const escapedHost = escapeMarkdown(data.host);
-    
-    bot.sendMessage(chatId, `✅ Бот **${escapedUsername}** подключился: ${escapedHost}:${data.port}`, { parse_mode: 'Markdown' });
-    data.reconnectAttempts = 0;
+      mcBot.on('login', () => {
+        const escapedUsername = escapeMarkdown(data.username);
+        const escapedHost = escapeMarkdown(data.host);
+        
+        if (data.sendNotifications) {
+            bot.sendMessage(chatId, `✅ Бот **${escapedUsername}** подключился: ${escapedHost}:${data.port}`, { parse_mode: 'Markdown' });
+        }
+        data.reconnectAttempts = 0;
 
-    // Запускаем Anti-AFK
-    if (!data.afkIntervalId) {
-      data.afkIntervalId = setInterval(() => {
-          performRandomAction(mcBot);
-      }, 60000);
-    }
+        // Запускаем Anti-AFK
+        if (!data.afkIntervalId) {
+          data.afkIntervalId = setInterval(() => {
+              performRandomAction(mcBot);
+          }, 60000);
+        }
 
-    // Попытка регистрации
-    setTimeout(() => {
-      mcBot.chat('/register 1R2r3 1R2r3');
-    }, 5000);
-  });
+        // Попытка регистрации
+        setTimeout(() => {
+          mcBot.chat('/register 1R2r3 1R2r3');
+        }, 5000);
+      });
 
-  mcBot.on('end', (reason) => {
-    bot.sendMessage(chatId, `❌ Бот был отключен (${reason}). Попытка переподключения.`);
-    data.reconnectAttempts++;
+      mcBot.on('end', (reason) => {
+        if (data.sendNotifications) {
+            bot.sendMessage(chatId, `❌ Бот был отключен (${reason}). Попытка переподключения.`);
+        }
+        data.reconnectAttempts++;
 
-    if (data.afkIntervalId) {
-        clearInterval(data.afkIntervalId);
-        data.afkIntervalId = null;
-    }
-    
-    if (data.reconnectAttempts < maxReconnectAttempts) {
-      setTimeout(() => createMinecraftBot(chatId), reconnectInterval);
-    } else {
-      bot.sendMessage(chatId, '❗️ Достигнуто максимальное количество попыток подключения. Бот остановлен.');
-      data.mcBot = null;
-    }
-  });
-
-  mcBot.on('error', (err) => {
-    bot.sendMessage(chatId, `⚠️ Произошла ошибка: ${err.message}.`);
-  });
-
-  mcBot.on('death', () => {
-    bot.sendMessage(chatId, '💀 Бот умер. Респавн...');
-    setTimeout(() => {
-      mcBot.respawn();
-    }, 5000);
-  });
-  
-  mcBot.on('players', (players) => {
-    let botCount = 0;
-    for (let player in players) {
-      if (players[player] && players[player].username === botOptions.username) {
-        botCount++;
-      }
-    }
-    if (botCount > 1) {
-      mcBot.quit();
-      bot.sendMessage(chatId, '🚫 Обнаружен другой бот с тем же именем. Отключаюсь.');
-    }
-  });
-}
-
-// --- Хелперы для кнопок ---
-function handleStopBot(chatId) {
-    const data = getUserBotData(chatId);
-    
-    if (data.mcBot) {
-        data.mcBot.quit();
-        data.mcBot = null;
         if (data.afkIntervalId) {
             clearInterval(data.afkIntervalId);
             data.afkIntervalId = null;
         }
-        bot.sendMessage(chatId, '⏹ Minecraft бот безопасно остановлен и отключен от сервера.');
-    } else {
-        bot.sendMessage(chatId, 'Бот не запущен.');
-    }
+        
+        if (data.reconnectAttempts < maxReconnectAttempts) {
+          setTimeout(() => createMinecraftBot(chatId), reconnectInterval);
+        } else {
+          if (data.sendNotifications) {
+            bot.sendMessage(chatId, '❗️ Достигнуто максимальное количество попыток подключения. Бот остановлен.');
+          }
+          data.mcBot = null;
+        }
+      });
+
+      mcBot.on('error', (err) => {
+        if (data.sendNotifications) {
+            bot.sendMessage(chatId, `⚠️ Произошла ошибка: ${err.message}.`);
+        }
+        
+        // В случае критической ошибки, пытаемся завершить и очистить ссылку
+        if (data.mcBot && typeof data.mcBot.quit === 'function') {
+           data.mcBot.quit(); 
+        }
+        data.mcBot = null; 
+      });
+
+      mcBot.on('death', () => {
+        if (data.sendNotifications) {
+            bot.sendMessage(chatId, '💀 Бот умер. Респавн...');
+        }
+        setTimeout(() => {
+          if (data.mcBot) {
+            data.mcBot.respawn();
+          }
+        }, 5000);
+      });
+      
+      mcBot.on('players', (players) => {
+        let botCount = 0;
+        for (let player in players) {
+          if (players[player] && players[player].username === botOptions.username) {
+            botCount++;
+          }
+        }
+        if (botCount > 1) {
+          if (data.mcBot && typeof data.mcBot.quit === 'function') {
+             data.mcBot.quit();
+          }
+          if (data.sendNotifications) {
+            bot.sendMessage(chatId, '🚫 Обнаружен другой бот с тем же именем. Отключаюсь.');
+          }
+        }
+      });
+
+  } catch (err) {
+      // Ловим синхронные ошибки (например, неверные опции)
+      console.error(`[Chat ID ${chatId}] Критическая ошибка при создании Mineflayer бота: ${err.message}`);
+      data.mcBot = null;
+      bot.sendMessage(chatId, `❌ Не удалось создать Mineflayer бота. Проверьте адрес сервера. Ошибка: ${err.message}`);
+      
+      data.reconnectAttempts++;
+      if (data.reconnectAttempts < maxReconnectAttempts) {
+          setTimeout(() => createMinecraftBot(chatId), reconnectInterval);
+      }
+  }
 }
 
 function handleStartBot(chatId) {
@@ -242,12 +276,12 @@ function handleStartBot(chatId) {
         bot.sendMessage(chatId, `Запускаю Minecraft бота **${escapedUsername}**...`, { parse_mode: 'Markdown' });
         createMinecraftBot(chatId);
 
-        // Таймер для отправки статуса каждые 60 минут (только если его нет)
+        // Таймер для отправки статуса каждые 60 минут
         if (!data.statusIntervalId) {
           data.statusIntervalId = setInterval(() => {
-            if (data.mcBot) {
+            if (data.mcBot && data.sendNotifications) {
               bot.sendMessage(chatId, 'Minecraft бот работает нормально.');
-            } else {
+            } else if (!data.mcBot) {
               clearInterval(data.statusIntervalId);
               data.statusIntervalId = null;
             }
@@ -269,17 +303,18 @@ bot.onText(/\/start|\/menu/, (msg) => {
     
     const isBotRunning = data.mcBot !== null;
     let statusText = isBotRunning ? '🟢 Подключен' : '🔴 Отключен';
+    let notifStatus = data.sendNotifications ? 'Включены (🔔)' : 'Выключены (🔕)';
     
     // Экранирование для отображения в меню
     let escapedHost = escapeMarkdown(data.host);
     let escapedUsername = escapeMarkdown(data.username);
     let serverText = data.host ? `${escapedHost}:${data.port}` : 'Не задан'; 
 
-    const messageText = `⚙️ **Панель управления ботом**\n\nСтатус: **${statusText}**\nСервер: **${serverText}**\nИмя бота: **${escapedUsername}**`;
+    const messageText = `⚙️ **Панель управления ботом**\n\nСтатус: **${statusText}**\nСервер: **${serverText}**\nИмя бота: **${escapedUsername}**\nУведомления: **${notifStatus}**`;
     
     bot.sendMessage(userChatId, messageText, { 
         parse_mode: 'Markdown', 
-        reply_markup: getMainMenuKeyboard(data.username).reply_markup 
+        reply_markup: getMainMenuKeyboard(data.username, data.sendNotifications).reply_markup 
     });
 });
 
@@ -287,6 +322,7 @@ bot.onText(/\/start|\/menu/, (msg) => {
 bot.on('callback_query', (query) => {
     const dataQuery = query.data;
     const userChatId = String(query.message.chat.id);
+    const data = getUserBotData(userChatId);
     
     bot.answerCallbackQuery(query.id); 
 
@@ -301,8 +337,18 @@ bot.on('callback_query', (query) => {
             bot.sendMessage(userChatId, '💬 Отправьте адрес сервера в формате: `/setserver домен:порт` (например: `/setserver test.aternos.me:17484`)', { parse_mode: 'Markdown' });
             break;
         case 'set_username_prompt':
-            getUserBotData(userChatId).awaitingUsername = true;
+            data.awaitingUsername = true;
             bot.sendMessage(userChatId, '💬 **Отправьте новое имя** для Minecraft бота. (Имя должно быть от 3 до 16 символов без пробелов)', { parse_mode: 'Markdown' });
+            break;
+        case 'toggle_notifications': // NEW HANDLER
+            data.sendNotifications = !data.sendNotifications;
+            const status = data.sendNotifications ? 'ВКЛЮЧЕНЫ (🔔). Вы будете получать сообщения о подключении/отключении.' : 'ВЫКЛЮЧЕНЫ (🔕). Бот будет работать тихо.';
+            bot.sendMessage(userChatId, `✅ Уведомления успешно **${status}**`);
+            // Обновить меню, чтобы показать новый статус
+            bot.editMessageReplyMarkup(
+                getMainMenuKeyboard(data.username, data.sendNotifications).reply_markup,
+                { chat_id: userChatId, message_id: query.message.message_id }
+            );
             break;
     }
 });
@@ -338,10 +384,8 @@ bot.on('message', (msg) => {
     const userChatId = String(msg.chat.id);
     const data = getUserBotData(userChatId);
     
-    // Игнорируем команды
     if (msg.text && msg.text.startsWith('/')) return; 
 
-    // Логика захвата нового имени
     if (data.awaitingUsername) {
         const newUsername = msg.text.trim();
         
@@ -365,7 +409,6 @@ bot.on('message', (msg) => {
 });
 
 // 5. Обработчик для прослушивания порта Webhook
-// ВНИМАНИЕ: Это исправленный блок для парсинга JSON
 require('http').createServer((req, res) => {
   if (req.method === 'POST') {
     let body = '';
@@ -386,7 +429,6 @@ require('http').createServer((req, res) => {
       }
     });
   } else {
-    // Для GET-запросов (проверки статуса)
     res.end('OK');
   }
 }).listen(port, () => {
@@ -397,14 +439,8 @@ require('http').createServer((req, res) => {
 process.on('SIGINT', () => {
   console.log('Получен сигнал SIGINT. Удаление Webhook и остановка всех Mineflayer ботов...');
   
-  // Остановка всех Mineflayer ботов перед завершением
   for (const chatId in activeBots) {
-      if (activeBots[chatId].mcBot) {
-          activeBots[chatId].mcBot.quit();
-          if (activeBots[chatId].afkIntervalId) {
-              clearInterval(activeBots[chatId].afkIntervalId);
-          }
-      }
+      handleStopBot(chatId); // Используем общую функцию остановки
   }
 
   bot.deleteWebHook().then(() => {
