@@ -26,7 +26,7 @@ bot.setWebHook(`https://${url}/bot${telegramToken}`, { allowed_updates: ["messag
 // --- Глобальное состояние для Multi-User ---
 const activeBots = {};
 const maxReconnectAttempts = 100;
-const reconnectInterval = 30000;
+const reconnectInterval = 600000;
 const resetAttemptsInterval = 60 * 60 * 1000;
 
 
@@ -448,3 +448,4 @@ process.on('SIGINT', () => {
     process.exit();
   });
 });
+
