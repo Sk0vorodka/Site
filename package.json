@@ -1,22 +1,13 @@
 {
   "name": "aternos-telegram-bot",
   "version": "1.0.0",
-  "description": "Minecraft AFK bot with Telegram control and notifications.",
+  "description": "Minecraft bot controlled via Telegram",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node bot.js"
   },
   "dependencies": {
-    "mineflayer": "^4.0.0",
+    "mineflayer": "^4.10.0",
     "node-telegram-bot-api": "^0.61.0"
-  },
-  "keywords": [
-    "minecraft",
-    "mineflayer",
-    "aternos",
-    "telegram"
-  ],
-  "author": "UrelzOfficial",
-  "license": "ISC"
+  }
 }
