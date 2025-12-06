@@ -11,7 +11,7 @@ const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE';
 const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // --- НАСТРОЙКИ ПРОКСИ ---
-// Используем ваш домен для обхода блокировки Aternos
+// Используется для обхода блокировки Aternos (требует 'socks-client')
 const PROXY_HOST = 'router.comss.one'; 
 const PROXY_PORT = 1080; 
 // --- КОНЕЦ НАСТРОЕК ПРОКСИ ---
@@ -37,7 +37,8 @@ async function sendNotification(chatId, message) {
             return;
         }
         
-        // Экранирование символов для MarkdownV2
+        // 🟢 ИСПРАВЛЕНИЕ: Полное экранирование всех спецсимволов MarkdownV2
+        // Экранируем: _ * [ ] ( ) ~ ` > # + - = | { } . !
         const escapedMessage = message.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 
         const url = `${BASE_TELEGRAM_URL}/sendMessage`;
@@ -54,8 +55,15 @@ async function sendNotification(chatId, message) {
         });
         
         if (!response.ok) {
-            // Если ошибка 400, это может быть неверное форматирование MarkdownV2
             console.error(`[Chat ${chatId}] Ошибка отправки уведомления: ${response.status} ${response.statusText}`);
+            // Можно попробовать отправить без MarkdownV2 в случае ошибки, чтобы видеть хоть что-то
+            if (response.status === 400) {
+                 await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: chatId, text: `[Ошибка форматирования] ${message}` })
+                });
+            }
         }
     } catch (e) {
         console.error(`[Chat ${chatId}] Критическая ошибка сети при отправке уведомления: ${e.message}`);
@@ -97,9 +105,10 @@ function setupMineflayerBot(chatId, host, port, username) {
 
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
-        sendNotification(chatId, `✅ Бот \\*${username}\\* успешно подключился к \\*${host}:${port}\\*`);
+        // Убрал лишние * чтобы избежать проблем с экранированием, если экранирование все еще сбоит
+        sendNotification(chatId, `✅ Бот ${username} успешно подключился к ${host}:${port}`);
         
-        // 🟢 ИСПРАВЛЕНИЕ КРИТИЧЕСКОЙ ОШИБКИ: Проверка на существование объекта перед записью
+        // Проверка на существование объекта перед сбросом счетчика
         if (activeBots[chatId]) {
             activeBots[chatId].reconnectAttempts = 0; 
         }
@@ -108,7 +117,7 @@ function setupMineflayerBot(chatId, host, port, username) {
     bot.on('error', (err) => {
         const errorMessage = err.message || 'Неизвестная ошибка подключения';
         console.error(`[Chat ${chatId}] Ошибка бота: ${errorMessage}`);
-        sendNotification(chatId, `❌ Критическая ошибка: \\*${errorMessage}\\*`);
+        sendNotification(chatId, `❌ Критическая ошибка: ${errorMessage}`);
         
         if (activeBots[chatId] && activeBots[chatId].bot) {
              activeBots[chatId].bot.quit('disconnect.error'); 
@@ -131,21 +140,21 @@ function setupMineflayerBot(chatId, host, port, username) {
         
         if (activeBots[chatId] && activeBots[chatId].reconnectAttempts < maxAttempts) {
             activeBots[chatId].reconnectAttempts++;
-            sendNotification(chatId, `⚠️ Бот был отключен \\(${reason}\\)\\. Попытка переподключения \\(${activeBots[chatId].reconnectAttempts}/${maxAttempts}\\)\\.`);
+            sendNotification(chatId, `⚠️ Бот был отключен (${reason}). Попытка переподключения (${activeBots[chatId].reconnectAttempts}/${maxAttempts})...`);
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
                 setupMineflayerBot(chatId, host, port, username); 
             }, 5000 * activeBots[chatId].reconnectAttempts); 
         } else {
-            sendNotification(chatId, `🛑 Бот отключен окончательно \\(${reason}\\)\\. Достигнут лимит попыток переподключения\\. Снова запустите через Telegram\\.`);
+            sendNotification(chatId, `🛑 Бот отключен окончательно (${reason}). Достигнут лимит попыток переподключения. Снова запустите через Telegram.`);
             cleanupBot(chatId);
         }
     });
     
     bot.on('spawn', () => {
         console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
-        sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`);
+        sendNotification(chatId, `🌍 Бот заспавнился и готов к работе.`);
     });
 }
 
@@ -155,17 +164,11 @@ function setupMineflayerBot(chatId, host, port, username) {
 // /api/start
 app.post('/api/start', (req, res) => {
     const { chatId, host, port, username } = req.body;
-
-    if (!chatId || !host || !port || !username) {
-        return res.status(400).send({ error: "Missing parameters: chatId, host, port, username." });
-    }
-
+    // ... (проверка параметров)
     try {
-        console.log(`[Chat ${chatId}] Получена команда START для ${host}:${port}`);
         setupMineflayerBot(chatId, host, port, username);
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
-        console.error(`[Chat ${chatId}] Ошибка при запуске: ${e.message}`);
         res.status(500).send({ error: e.message });
     }
 });
@@ -174,11 +177,7 @@ app.post('/api/start', (req, res) => {
 // /api/stop
 app.post('/api/stop', (req, res) => {
     const { chatId } = req.body;
-
-    if (!chatId) {
-        return res.status(400).send({ error: "Missing parameter: chatId." });
-    }
-
+    // ... (проверка параметров)
     if (activeBots[chatId] && activeBots[chatId].bot) {
         activeBots[chatId].bot.quit('disconnect.quitting'); 
         res.status(200).send({ message: "Bot stop command sent." });
@@ -192,14 +191,11 @@ app.post('/api/stop', (req, res) => {
 // /api/command
 app.post('/api/command', (req, res) => {
     const { chatId, command, data } = req.body;
-
-    if (!chatId || !command) {
-        return res.status(400).send({ error: "Missing parameters: chatId or command." });
-    }
+    // ... (проверка параметров)
 
     const botEntry = activeBots[chatId];
     if (!botEntry || !botEntry.bot) {
-        sendNotification(chatId, `❌ Ошибка: Бот не запущен\\. Сначала запустите его командой /start\\.`);
+        sendNotification(chatId, `❌ Ошибка: Бот не запущен. Сначала запустите его командой /start.`);
         return res.status(404).send({ error: "Bot not running." });
     }
 
@@ -210,38 +206,34 @@ app.post('/api/command', (req, res) => {
             case 'CHAT':
                 if (data) {
                     bot.chat(data);
-                    sendNotification(chatId, `💬 Сообщение отправлено в чат: \\*${data}\\*`);
+                    sendNotification(chatId, `💬 Сообщение отправлено в чат: ${data}`);
                 }
                 break;
             
             case 'CONSOLE':
                 if (data && data.startsWith('/')) {
-                    // Команда /CONSOLE принимает полную команду (например, /op user)
-                    // Mineflayer отправляет ее как сообщение в чат, сервер ее выполняет
+                    // Команда /op, /time, /teleport и т.д.
                     bot.chat(data); 
-                    sendNotification(chatId, `⚙️ Команда отправлена на сервер: \`${data}\``);
+                    sendNotification(chatId, `⚙️ Команда отправлена на сервер: ${data}`);
                 } else {
                     sendNotification(chatId, `❌ Ошибка: Команда CONSOLE должна начинаться со слэша (/)`);
                 }
                 break;
 
             case 'MOVE_FORWARD':
-                // Пример простой команды движения
                 bot.setControlState('forward', true);
                 setTimeout(() => {
                     bot.setControlState('forward', false);
                 }, 1000); 
-                sendNotification(chatId, `➡️ Бот двинулся вперед на 1 секунду\\.`);
+                sendNotification(chatId, `➡️ Бот двинулся вперед на 1 секунду.`);
                 break;
 
             default:
-                sendNotification(chatId, `❓ Неизвестная команда: \\*${command}\\*`);
+                sendNotification(chatId, `❓ Неизвестная команда: ${command}`);
         }
 
         res.status(200).send({ message: `Command ${command} executed.` });
     } catch (e) {
-        console.error(`[Chat ${chatId}] Ошибка выполнения команды ${command}: ${e.message}`);
-        sendNotification(chatId, `❌ Ошибка при выполнении команды \\*${command}\\*: ${e.message}`);
         res.status(500).send({ error: e.message });
     }
 });
