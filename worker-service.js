@@ -1,260 +1,193 @@
+// --- КОНСТАНТЫ И ИМПОРТЫ ---
 const express = require('express');
+const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
+// Импортируем fetch, чтобы исправить "fetch is not a function"
 const fetch = require('node-fetch'); 
 
 const app = express();
-const PORT = process.env.PORT || 8081;
+const PORT = process.env.PORT || 10000; // Render требует использования PORT из env
 
-// --- Переменные окружения ---
-const WORKER_TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; // Токен, который будет использоваться для отправки уведомлений
-const maxReconnectAttempts = 100;
-const reconnectInterval = 300000; // 5 минут
+// ⚠️ ЗАМЕНИТЕ ЭТОТ ТОКЕН НА ТОКЕН ВАШЕГО ТЕЛЕГРАМ-БОТА
+const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE'; 
+const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
-// --- Глобальное состояние ---
-const activeBots = {}; 
+// Хранилище для активных ботов
+const activeBots = {};
 
-// --- Middleware ---
-app.use(express.json());
+// --- КОНФИГУРАЦИЯ EXPRESS ---
+app.use(bodyParser.json());
 
-// ----------------------------------------------------------------------
-//                        ФУНКЦИИ УВЕДОМЛЕНИЙ (НАПРЯМУЮ В TELEGRAM)
-// ----------------------------------------------------------------------
+// Заглушка для основного пути
+app.get('/', (req, res) => {
+    res.send('Worker API is running. Use /api/start or /api/stop.');
+});
 
-/**
- * Отправляет уведомление напрямую в Telegram API.
- */
-async function sendTelegramNotification(chatId, message, status) {
-    if (!WORKER_TELEGRAM_TOKEN) {
-        console.error(`[Chat ${chatId}] TELEGRAM_TOKEN не задан. Уведомления отключены.`);
+// --- ФУНКЦИИ УВЕДОМЛЕНИЙ ---
+
+async function sendNotification(chatId, message) {
+    if (!TELEGRAM_TOKEN) {
+        console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
         return;
     }
     
-    // Убираем поле "notifyUrl", отправляем прямо через API
-    const telegramApiUrl = `https://api.telegram.org/bot${WORKER_TELEGRAM_TOKEN}/sendMessage`;
+    // Экранирование символов для MarkdownV2 (важно для адресов серверов)
+    const escapedMessage = message.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 
-    try {
-        const response = await fetch(telegramApiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                chat_id: chatId, 
-                text: message,
-                parse_mode: 'Markdown' // Используем Markdown для форматирования
-            })
-        });
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`[Chat ${chatId}] Ошибка отправки уведомления (${response.status}): ${errorText}`);
-        }
-    } catch (error) {
-        console.error(`[Chat ${chatId}] Критическая ошибка сети при отправке уведомления: ${error.message}`);
-    }
-}
-
-// ----------------------------------------------------------------------
-//                        ФУНКЦИИ MINEFLAYER
-// ----------------------------------------------------------------------
-
-/**
- * Выполняет случайное анти-AFK действие.
- */
-function performRandomAction(mcBot) {
-    if (!mcBot || mcBot.end) return;
-    
-    const actions = ['jump', 'move', 'rotate'];
-    const action = actions[Math.floor(Math.random() * actions.length)];
-
-    if (action === 'jump') {
-        mcBot.setControlState('jump', true);
-        setTimeout(() => mcBot.setControlState('jump', false), 500);
-    } else if (action === 'move') {
-        const directions = ['forward', 'back', 'left', 'right'];
-        const direction = directions[Math.floor(Math.random() * directions.length)];
-        mcBot.setControlState(direction, true);
-        setTimeout(() => mcBot.setControlState(direction, false), 1000);
-    } else if (action === 'rotate') {
-        const yaw = Math.random() * Math.PI * 2;
-        const pitch = (Math.random() - 0.5) * Math.PI;
-        mcBot.look(yaw, pitch, true);
-    }
-}
-
-
-/**
- * Останавливает и очищает ресурсы для конкретного бота.
- */
-function cleanupBot(chatId) {
-    const data = activeBots[chatId];
-    if (!data) return;
-
-    if (data.afkIntervalId) {
-        clearInterval(data.afkIntervalId);
-        data.afkIntervalId = null;
-    }
-    
-    if (data.mcBot) {
-        if (typeof data.mcBot.quit === 'function' && !data.mcBot.end) { 
-            data.mcBot.quit();
-        }
-        data.mcBot = null;
-    }
-    
-    delete activeBots[chatId];
-    console.log(`[Chat ${chatId}] Ресурсы бота очищены.`);
-}
-
-/**
- * Создает и запускает Mineflayer-бота с логикой переподключения и AFK.
- */
-function createMinecraftBot(options) {
-    const { chatId, host, port, username } = options; // notifyUrl больше не нужен
-    const chatKey = String(chatId);
-    
-    if (activeBots[chatKey] && activeBots[chatKey].reconnectAttempts >= maxReconnectAttempts) {
-        sendTelegramNotification(chatId, 'Превышено количество попыток подключения к Minecraft-серверу. Бот остановлен.', 'DISCONNECTED');
-        cleanupBot(chatId);
-        return;
-    }
-
-    if (activeBots[chatKey] && activeBots[chatKey].mcBot) {
-        cleanupBot(chatId);
-    }
-    
-    const data = activeBots[chatKey] || { reconnectAttempts: 0 };
-    activeBots[chatKey] = data;
-
-    const botOptions = {
-        host: host,
-        port: port,
-        username: username, 
-        version: false 
+    const url = `${BASE_TELEGRAM_URL}/sendMessage`;
+    const payload = {
+        chat_id: chatId,
+        text: escapedMessage,
+        parse_mode: 'MarkdownV2'
     };
 
     try {
-        const mcBot = mineflayer.createBot(botOptions);
-        data.mcBot = mcBot;
-        
-        // --- Обработчики событий ---
-        
-        mcBot.on('login', () => {
-            sendTelegramNotification(chatId, `✅ Бот **${username}** подключился к ${host}:${port}`, 'CONNECTED');
-            data.reconnectAttempts = 0;
-
-            if (!data.afkIntervalId) {
-                data.afkIntervalId = setInterval(() => {
-                    performRandomAction(mcBot);
-                }, 60000); // Анти-AFK каждые 60 секунд
-            }
-            
-            // Логика регистрации для Aternos
-            setTimeout(() => {
-                 if (mcBot && !mcBot.end) {
-                    mcBot.chat('/register 1R2r3 1R2r3'); 
-                 }
-            }, 5000);
-        });
-
-        mcBot.on('end', (reason) => {
-            const message = `❌ Бот был отключен (**${reason}**). Попытка переподключения через ${reconnectInterval/1000} секунд.`;
-            sendTelegramNotification(chatId, message, 'DISCONNECTED');
-            
-            data.reconnectAttempts++;
-            if (data.afkIntervalId) {
-                clearInterval(data.afkIntervalId);
-                data.afkIntervalId = null;
-            }
-
-            if (data.reconnectAttempts < maxReconnectAttempts) {
-                // ПЕРЕЗАПУСК
-                setTimeout(() => createMinecraftBot(options), reconnectInterval);
-            } else {
-                sendTelegramNotification(chatId, '❗️ Достигнуто максимальное количество попыток подключения. Бот остановлен.', 'DISCONNECTED');
-                cleanupBot(chatId);
-            }
-        });
-
-        mcBot.on('error', (err) => {
-            const message = `⚠️ Критическая ошибка: ${err.message}. Бот перезапускается.`;
-            sendTelegramNotification(chatId, message, 'ERROR');
-            
-            if (data.mcBot && typeof data.mcBot.quit === 'function' && !data.mcBot.end) {
-               data.mcBot.quit(); 
-            }
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
         });
         
-        mcBot.on('death', () => {
-            sendTelegramNotification(chatId, '💀 Бот умер. Респавн...', 'CONNECTED');
-            setTimeout(() => {
-              if (mcBot && !mcBot.end) {
-                mcBot.respawn();
-              }
-            }, 5000);
-        });
-
-    } catch (err) {
-        const message = `❌ Не удалось создать Mineflayer бота. Ошибка: ${err.message}`;
-        sendTelegramNotification(chatId, message, 'ERROR');
-        data.reconnectAttempts++;
-        
-        if (data.reconnectAttempts < maxReconnectAttempts) {
-            setTimeout(() => createMinecraftBot(options), reconnectInterval);
-        } else {
-            cleanupBot(chatId);
+        if (!response.ok) {
+            console.error(`[Chat ${chatId}] Ошибка отправки уведомления: ${response.status} ${response.statusText}`);
         }
+    } catch (e) {
+        // Логируем ошибку, которая у вас была: fetch is not a function
+        console.error(`[Chat ${chatId}] Критическая ошибка сети при отправке уведомления: ${e.message}`);
     }
 }
 
-// ----------------------------------------------------------------------
-//                             API МАРШРУТЫ
-// ----------------------------------------------------------------------
+function cleanupBot(chatId) {
+    if (activeBots[chatId]) {
+        console.log(`[Chat ${chatId}] Ресурсы бота очищены.`);
+        delete activeBots[chatId];
+    }
+}
 
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
+
+function setupMineflayerBot(chatId, host, port, username) {
+    // Если бот уже запущен, сначала останавливаем его
+    if (activeBots[chatId] && activeBots[chatId].bot) {
+        activeBots[chatId].bot.quit('Запуск нового соединения');
+        cleanupBot(chatId);
+    }
+    
+    // ⚠️ ГЛАВНОЕ ИСПРАВЛЕНИЕ: ЯВНО УКАЗЫВАЕМ ВЕРСИЮ
+    const bot = mineflayer.createBot({
+        host: host,
+        port: parseInt(port),
+        username: username,
+        version: '1.20.1' // <--- ВАША ВЕРСИЯ
+        // Если у вас premium (Mojang/Microsoft) аккаунт, добавьте:
+        // auth: 'mojang' ИЛИ auth: 'microsoft'
+    });
+
+    activeBots[chatId] = { bot, host, port, username, reconnectAttempts: 0 };
+    const maxAttempts = 5;
+
+    // --- ОБРАБОТЧИКИ СОБЫТИЙ MINEFLAYER ---
+
+    bot.on('login', () => {
+        console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
+        sendNotification(chatId, `✅ Бот \\*${username}\\* подключился: ${host}:${port}`);
+        activeBots[chatId].reconnectAttempts = 0; // Сброс при успешном входе
+    });
+
+    bot.on('error', (err) => {
+        console.error(`[Chat ${chatId}] Ошибка бота: ${err.message}`);
+        sendNotification(chatId, `❌ Критическая ошибка: ${err.message}`);
+        
+        // ВАЖНО: При ошибке завершаем процесс
+        if (activeBots[chatId] && activeBots[chatId].bot) {
+             activeBots[chatId].bot.quit('disconnect.error');
+        }
+    });
+
+    bot.on('end', (reason) => {
+        console.log(`[Chat ${chatId}] Бот отключен. Причина: ${reason}`);
+        
+        // Проверяем, была ли это команда на остановку от пользователя
+        if (reason.includes('disconnect.quitting') && activeBots[chatId]) {
+            // Если это пользовательская команда (quit), не пытаемся переподключиться
+            sendNotification(chatId, `⏹ Бот остановлен по команде.`);
+            cleanupBot(chatId);
+            return; 
+        }
+
+        // Если бот был отключен не по команде, пытаемся переподключиться
+        if (activeBots[chatId] && activeBots[chatId].reconnectAttempts < maxAttempts) {
+            activeBots[chatId].reconnectAttempts++;
+            sendNotification(chatId, `❌ Бот был отключен \\(${reason}\\)\\. Попытка переподключения \\(${activeBots[chatId].reconnectAttempts}/${maxAttempts}\\)\\.`);
+            
+            setTimeout(() => {
+                console.log(`[Chat ${chatId}] Попытка переподключения...`);
+                // Рекурсивный вызов для создания нового экземпляра
+                setupMineflayerBot(chatId, host, port, username); 
+            }, 5000 * activeBots[chatId].reconnectAttempts); // Увеличиваем задержку
+        } else {
+            sendNotification(chatId, `🛑 Бот отключен окончательно \\(${reason}\\)\\. Достигнут лимит попыток переподключения\\. Снова запустите через Telegram\\.`);
+            cleanupBot(chatId);
+        }
+    });
+    
+    // Чтобы бот не завершался сразу после входа
+    bot.on('spawn', () => {
+        console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
+    });
+    
+    // Сохраняем ссылку на созданный бот в активных ботах
+    activeBots[chatId] = { bot, host, port, username, reconnectAttempts: 0 };
+}
+
+
+// --- API ЭНДПОИНТЫ ---
+
+// /api/start
 app.post('/api/start', (req, res) => {
-    // ВАЖНО: notifyUrl здесь больше не нужен, мы его не запрашиваем
-    const { chatId, host, port, username } = req.body; 
-    
+    const { chatId, host, port, username } = req.body;
+
     if (!chatId || !host || !port || !username) {
-        return res.status(400).send({ error: 'Не хватает обязательных параметров: chatId, host, port, username.' });
-    }
-    
-    const chatKey = String(chatId);
-
-    if (activeBots[chatKey]) {
-        return res.status(200).send({ status: 'ok', message: 'Бот уже запущен.' });
+        return res.status(400).send({ error: "Missing parameters: chatId, host, port, username." });
     }
 
-    const options = { chatId, host, port: Number(port), username };
-    
-    createMinecraftBot(options);
-    console.log(`[Chat ${chatId}] Получена команда START для ${host}:${port}`);
-    
-    res.status(200).send({ status: 'ok', message: 'Попытка запуска Mineflayer-бота.' });
+    if (activeBots[chatId] && activeBots[chatId].bot) {
+        // Если бот уже запущен, отправляем статус 200, но с сообщением
+        return res.status(200).send({ message: "Bot is already running." });
+    }
+
+    try {
+        console.log(`[Chat ${chatId}] Получена команда START для ${host}:${port}`);
+        setupMineflayerBot(chatId, host, port, username);
+        res.status(200).send({ message: "Bot start command received." });
+    } catch (e) {
+        console.error(`[Chat ${chatId}] Ошибка при запуске: ${e.message}`);
+        res.status(500).send({ error: e.message });
+    }
 });
 
 
+// /api/stop
 app.post('/api/stop', (req, res) => {
     const { chatId } = req.body;
-    
+
     if (!chatId) {
-        return res.status(400).send({ error: 'Не хватает обязательного параметра: chatId.' });
-    }
-    
-    const chatKey = String(chatId);
-    
-    if (!activeBots[chatKey]) {
-        return res.status(200).send({ status: 'ok', message: 'Бот не был запущен.' });
+        return res.status(400).send({ error: "Missing parameter: chatId." });
     }
 
-    cleanupBot(chatKey);
-    sendTelegramNotification(chatId, '⏹ Minecraft бот безопасно остановлен и отключен от сервера.', 'DISCONNECTED');
-
-    res.status(200).send({ status: 'ok', message: 'Бот остановлен.' });
+    if (activeBots[chatId] && activeBots[chatId].bot) {
+        // Используем 'disconnect.quitting' для обозначения ручной остановки
+        activeBots[chatId].bot.quit('disconnect.quitting'); 
+        // cleanupBot будет вызван обработчиком 'end'
+        res.status(200).send({ message: "Bot stop command sent." });
+    } else {
+        cleanupBot(chatId);
+        res.status(200).send({ message: "Bot is already stopped or not running." });
+    }
 });
 
-// ----------------------------------------------------------------------
-//                             ЗАПУСК СЕРВЕРА
-// ----------------------------------------------------------------------
 
+// --- ЗАПУСК СЕРВЕРА ---
 app.listen(PORT, () => {
-    console.log(`Mineflayer Worker запущен на порту ${PORT}`);
+    console.log(`Worker service running on port ${PORT}`);
 });
