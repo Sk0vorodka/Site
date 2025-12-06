@@ -1,7 +1,6 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
-// Важно: node-fetch версии 3+ больше не требует 'require', но мы используем его динамически.
 // Убедитесь, что эта строка удалена, если она была: // const fetch = require('node-fetch');
 
 const app = express();
@@ -24,25 +23,25 @@ app.get('/', (req, res) => {
 // --- ФУНКЦИИ УВЕДОМЛЕНИЙ ---
 
 async function sendNotification(chatId, message) {
-    // 🟢 ИСПРАВЛЕНИЕ #1: Динамический импорт для node-fetch v3
-    const { default: fetch } = await import('node-fetch'); 
-
-    if (!TELEGRAM_TOKEN) {
-        console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
-        return;
-    }
-    
-    // Экранирование символов для MarkdownV2
-    const escapedMessage = message.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-
-    const url = `${BASE_TELEGRAM_URL}/sendMessage`;
-    const payload = {
-        chat_id: chatId,
-        text: escapedMessage,
-        parse_mode: 'MarkdownV2'
-    };
-
+    // 🟢 ИСПРАВЛЕНИЕ: Динамический импорт для node-fetch v3
     try {
+        const { default: fetch } = await import('node-fetch'); 
+
+        if (!TELEGRAM_TOKEN) {
+            console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
+            return;
+        }
+        
+        // Экранирование символов для MarkdownV2
+        const escapedMessage = message.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+
+        const url = `${BASE_TELEGRAM_URL}/sendMessage`;
+        const payload = {
+            chat_id: chatId,
+            text: escapedMessage,
+            parse_mode: 'MarkdownV2'
+        };
+
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -67,22 +66,19 @@ function cleanupBot(chatId) {
 // --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
 
 function setupMineflayerBot(chatId, host, port, username) {
-    // 🟢 ИСПРАВЛЕНИЕ #2: Сначала проверяем, есть ли предыдущая сессия
-    let isReconnectingOrCleaning = false; 
-    
+    // Если бот уже запущен, сначала останавливаем его
     if (activeBots[chatId] && activeBots[chatId].bot) {
-        // Устанавливаем флаг, чтобы не отправлять сообщение об остановке
-        isReconnectingOrCleaning = true; 
-        // Принудительно отключаем предыдущую сессию с особой причиной
+        // Причина 'disconnect.cleanup' используется, чтобы не отправлять уведомление об остановке
         activeBots[chatId].bot.quit('disconnect.cleanup'); 
-        // Не вызываем cleanupBot здесь, он будет вызван в обработчике 'end'
+        // cleanupBot будет вызван обработчиком 'end'
     }
     
+    // 🟢 ОБХОД DNS-КЭША: ЯВНО УКАЗЫВАЕМ ВЕРСИЮ и используем ТОЛЬКО IP
     const bot = mineflayer.createBot({
-        host: host,
-        port: parseInt(port),
+        host: host, // 51.158.231.208
+        port: parseInt(port), // 17484
         username: username,
-        version: '1.20.1' // Используем вашу версию
+        version: '1.20.1' // <--- КРИТИЧЕСКИ ВАЖНО УКАЗАТЬ ВЕРСИЮ СЕРВЕРА
     });
 
     // Временно сохраняем данные, чтобы использовать их в обработчиках
@@ -93,7 +89,7 @@ function setupMineflayerBot(chatId, host, port, username) {
 
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
-        sendNotification(chatId, `✅ Бот \\*${username}\\* подключился к \\*${host}:${port}\\*`);
+        sendNotification(chatId, `✅ Бот \\*${username}\\* успешно подключился к \\*${host}:${port}\\*`);
         activeBots[chatId].reconnectAttempts = 0; 
     });
 
@@ -111,9 +107,7 @@ function setupMineflayerBot(chatId, host, port, username) {
     bot.on('end', (reason) => {
         console.log(`[Chat ${chatId}] Бот отключен. Причина: ${reason}`);
         
-        // 🟢 ИСПРАВЛЕНИЕ #3: Обработка причин отключения
-        
-        // 1. Ручная остановка пользователем из Telegram
+        // 1. Ручная остановка пользователем
         if (reason === 'disconnect.quitting') {
             sendNotification(chatId, `⏹ Бот остановлен по команде.`);
             cleanupBot(chatId);
