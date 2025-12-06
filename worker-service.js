@@ -10,12 +10,6 @@ const PORT = process.env.PORT || 10000;
 const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE'; 
 const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
-// --- НАСТРОЙКИ ПРОКСИ ---
-// Используется для обхода блокировки Aternos (требует 'socks-client')
-const PROXY_HOST = 'router.comss.one'; 
-const PROXY_PORT = 1080; 
-// --- КОНЕЦ НАСТРОЕК ПРОКСИ ---
-
 const activeBots = {};
 
 // --- КОНФИГУРАЦИЯ EXPRESS ---
