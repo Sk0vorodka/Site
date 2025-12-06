@@ -3,20 +3,35 @@ const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
 // Убедитесь, что эта строка удалена: // const fetch = require('node-fetch');
 
-// --- НАСТРОЙКИ ПРОКСИ ---
-// Новый рабочий SOCKS5-прокси
-const PROXY_HOST = '95.78.119.94:1080'; 
-const PROXY_PORT = 1080; 
-// --- КОНЕЦ НАСТРОЕК ПРОКСИ ---
-
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// ======================================================================
+// --- КОНФИГУРАЦИЯ БОТА И API ---
 // ⚠️ ЗАМЕНИТЕ ЭТОТ ТОКЕН НА ТОКЕН ВАШЕГО ТЕЛЕГРАМ-БОТА
 const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE'; 
 const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+// ======================================================================
 
-const activeBots = {};
+
+// --- КОНФИГУРАЦИЯ ПРОКСИ ---
+// ✅ СПИСОК ВАШИХ SOCKS5 ПРОКСИ
+const PROXY_LIST = [
+    { host: '85.172.55.85', port: 1080 },
+    { host: '84.252.70.254', port: 1080 },
+    { host: '95.78.119.94', port: 1080 },
+    { host: '195.91.129.101', port: 1337 },
+    { host: '85.113.43.181', port: 1080 },
+    { host: '217.173.31.28', port: 1080 },
+    { host: '78.29.46.43', port: 1080 },
+    { host: '87.117.39.250', port: 1080 },
+    { host: '31.129.147.102', port: 1080 },
+    { host: '78.140.46.48', port: 1080 },
+    { host: '31.43.194.184', port: 1080 },
+];
+// --- КОНЕЦ КОНФИГУРАЦИИ ПРОКСИ ---
+
+const activeBots = {}; // Хранит состояние активных ботов
 
 // --- КОНФИГУРАЦИЯ EXPRESS ---
 app.use(bodyParser.json());
@@ -25,7 +40,7 @@ app.get('/', (req, res) => {
     res.send('Worker API is running. Use /api/start, /api/stop, or /api/command.');
 });
 
-// --- ФУНКЦИИ УВЕДОМЛЕНИЙ (Без изменений) ---
+// --- ФУНКЦИИ УВЕДОМЛЕНИЙ ---
 
 async function sendNotification(chatId, message) {
     // Динамический импорт для node-fetch v3
@@ -53,7 +68,7 @@ async function sendNotification(chatId, message) {
             body: JSON.stringify(payload)
         });
         
-        // 2. ЗАПАСНОЙ ВАРИАНТ: Если MarkdownV2 не прошел (ошибка 400), отправляем чистый текст
+        // 2. ЗАПАСНОЙ ВАРИАНТ
         if (!response.ok && response.status === 400) {
             console.warn(`[Chat ${chatId}] Ошибка MarkdownV2, отправляю обычный текст.`);
             const plainPayload = {
@@ -83,18 +98,51 @@ function cleanupBot(chatId) {
     }
 }
 
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ ---
 
 function setupMineflayerBot(chatId, host, port, username) {
-    if (activeBots[chatId] && activeBots[chatId].bot) {
-        console.log(`[Chat ${chatId}] Обнаружен старый бот. Отключаю: ${activeBots[chatId].host}:${activeBots[chatId].port}`);
-        activeBots[chatId].bot.quit('disconnect.cleanup'); 
+    const maxAttempts = 5; // Максимальное количество попыток для стандартного реконнекта
+
+    // 1. Инициализация/Обновление состояния
+    let data = activeBots[chatId];
+    if (data && data.bot) {
+        console.log(`[Chat ${chatId}] Обнаружен старый бот. Отключаю: ${data.host}:${data.port}`);
+        data.bot.quit('disconnect.cleanup'); // Отключаем старый, чтобы не мешал
+        data.bot = null; // Обнуляем ссылку
     }
+
+    if (!data) {
+        // Инициализация нового сеанса
+        data = { bot: null, host, port, username, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false };
+        activeBots[chatId] = data;
+    } else {
+        // Обновление данных сеанса (если был /start)
+        data.host = host;
+        data.port = port;
+        data.username = username;
+        // При явном запуске команды /start сбрасываем попытки и индекс прокси
+        if (data.reconnectAttempts === 0) {
+             data.currentProxyIndex = 0; 
+        }
+        data.bot = null;
+    }
+
+
+    // 2. Проверка прокси
+    const currentIndex = data.currentProxyIndex;
+    if (currentIndex >= PROXY_LIST.length) {
+        console.log(`[Chat ${chatId}] Все ${PROXY_LIST.length} прокси были испробованы. Отключение.`);
+        sendNotification(chatId, `🛑 Бот отключен окончательно. Все ${PROXY_LIST.length} прокси были испробованы.`);
+        cleanupBot(chatId);
+        return;
+    }
+
+    const currentProxy = PROXY_LIST[currentIndex];
     
     // 📢 КРИТИЧЕСКОЕ ЛОГИРОВАНИЕ 📢
-    console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username}`);
+    console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
 
-    // НАСТРОЙКА MINEFLAYER С ПРОКСИ
+    // 3. Создание бота
     const bot = mineflayer.createBot({
         host: host, 
         port: parseInt(port), 
@@ -102,24 +150,23 @@ function setupMineflayerBot(chatId, host, port, username) {
         version: '1.20.1', 
         
         proxy: {
-            host: PROXY_HOST,
-            port: PROXY_PORT,
+            host: currentProxy.host,
+            port: currentProxy.port,
             type: 5 // SOCKS5
         }
     });
-    
-    // Убедитесь, что мы используем ПРАВИЛЬНЫЕ параметры для переподключения
-    activeBots[chatId] = { bot, host, port, username, reconnectAttempts: 0 };
-    const maxAttempts = 5;
 
-    // --- ОБРАБОТЧИКИ СОБЫТИЙ MINEFLAYER (Без изменений) ---
+    data.bot = bot; // Сохраняем ссылку на новый бот
+    
+    // --- ОБРАБОТЧИКИ СОБЫТИЙ MINEFLAYER ---
 
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
         sendNotification(chatId, `✅ Бот ${username} успешно подключился к ${host}:${port}`);
         
         if (activeBots[chatId]) {
-            activeBots[chatId].reconnectAttempts = 0; 
+            activeBots[chatId].reconnectAttempts = 0; // Сброс попыток при успехе
+            activeBots[chatId].currentProxyIndex = 0; // Сброс индекса при успехе
         }
     });
 
@@ -128,40 +175,63 @@ function setupMineflayerBot(chatId, host, port, username) {
         console.error(`[Chat ${chatId}] Ошибка бота: ${errorMessage}`);
         sendNotification(chatId, `❌ Критическая ошибка: ${errorMessage}`);
         
-        if (activeBots[chatId] && activeBots[chatId].bot) {
-             activeBots[chatId].bot.quit('disconnect.error'); 
+        const data = activeBots[chatId];
+        if (data) {
+            // Если ошибка связана с прокси/сетью (ECONNRESET, ETIMEDOUT), ставим флаг для ротации
+            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT')) {
+                data.isProxyFailure = true;
+            }
+            data.bot.quit('disconnect.error'); // Триггерим событие 'end'
         }
     });
 
     bot.on('end', (reason) => {
         console.log(`[Chat ${chatId}] Бот отключен. Причина: ${reason}`);
         
-        if (reason === 'disconnect.quitting') {
-            sendNotification(chatId, `⏹ Бот остановлен по команде.`);
-            cleanupBot(chatId);
-            return; 
-        }
-        
-        if (reason === 'disconnect.cleanup') {
-            cleanupBot(chatId);
-            return; 
-        }
-        
-        if (activeBots[chatId] && activeBots[chatId].reconnectAttempts < maxAttempts) {
-            // Используем host/port, сохраненные в activeBots[chatId]
-            const currentHost = activeBots[chatId].host;
-            const currentPort = activeBots[chatId].port;
+        const data = activeBots[chatId];
+        if (!data) return cleanupBot(chatId);
 
-            activeBots[chatId].reconnectAttempts++;
-            sendNotification(chatId, `⚠️ Бот был отключен (${reason}). Попытка переподключения (${activeBots[chatId].reconnectAttempts}/${maxAttempts})...`);
+        // 1. Специальные причины для немедленного выхода
+        if (reason === 'disconnect.quitting' || reason === 'disconnect.cleanup') {
+            sendNotification(chatId, `⏹ Бот остановлен по команде.`);
+            return cleanupBot(chatId);
+        }
+
+        // 2. Логика ротации прокси (срабатывает после ошибки подключения)
+        if (data.isProxyFailure) {
+            data.isProxyFailure = false; // Сброс флага
+            data.currentProxyIndex++;     // Переходим к следующему прокси
+            
+            if (data.currentProxyIndex < PROXY_LIST.length) {
+                const nextProxyIndex = data.currentProxyIndex;
+                sendNotification(chatId, `⚠️ Прокси не сработал. Попытка переподключения с ПРОКСИ №${nextProxyIndex + 1}/${PROXY_LIST.length}.`);
+
+                setTimeout(() => {
+                    console.log(`[Chat ${chatId}] Попытка переподключения с новым прокси...`);
+                    // Рекурсивный вызов, который возьмет новый индекс прокси из data.currentProxyIndex
+                    setupMineflayerBot(chatId, data.host, data.port, data.username); 
+                }, 5000);
+                return; 
+            } else {
+                 // Все прокси исчерпаны
+                sendNotification(chatId, `🛑 Бот отключен окончательно. Все ${PROXY_LIST.length} прокси были испробованы.`);
+                return cleanupBot(chatId);
+            }
+        }
+        
+        // 3. Стандартный реконнект (для киков, таймаутов и т.п.)
+        data.reconnectAttempts++;
+
+        if (data.reconnectAttempts < maxAttempts) {
+            sendNotification(chatId, `⚠️ Бот был отключен (${reason}). Попытка переподключения (${data.reconnectAttempts}/${maxAttempts})...`);
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
-                // Рекурсивный вызов с текущими параметрами из activeBots
-                setupMineflayerBot(chatId, currentHost, currentPort, username); 
-            }, 5000 * activeBots[chatId].reconnectAttempts); 
+                // Рекурсивный вызов, сохраняем текущий прокси
+                setupMineflayerBot(chatId, data.host, data.port, data.username); 
+            }, 5000 * data.reconnectAttempts); 
         } else {
-            sendNotification(chatId, `🛑 Бот отключен окончательно (${reason}). Достигнут лимит попыток переподключения. Снова запустите через Telegram.`);
+            sendNotification(chatId, `🛑 Бот отключен окончательно (${reason}). Достигнут лимит попыток переподключения.`);
             cleanupBot(chatId);
         }
     });
@@ -179,7 +249,16 @@ function setupMineflayerBot(chatId, host, port, username) {
 app.post('/api/start', (req, res) => {
     const { chatId, host, port, username } = req.body;
     // ... (проверка параметров)
+    if (!chatId || !host || !port || !username) {
+        return res.status(400).send({ error: "Missing required parameters: chatId, host, port, or username." });
+    }
+    
     try {
+        // При явном вызове сбрасываем счетчики, чтобы начать с первого прокси
+        if (activeBots[chatId]) {
+            activeBots[chatId].reconnectAttempts = 0;
+            activeBots[chatId].currentProxyIndex = 0;
+        }
         setupMineflayerBot(chatId, host, port, username);
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
@@ -187,11 +266,46 @@ app.post('/api/start', (req, res) => {
     }
 });
 
+// /api/stop
+app.post('/api/stop', (req, res) => {
+    const { chatId } = req.body;
+    if (!chatId) {
+        return res.status(400).send({ error: "Missing required parameter: chatId." });
+    }
 
-// ... (rest of the API endpoints)
+    if (activeBots[chatId] && activeBots[chatId].bot) {
+        activeBots[chatId].bot.quit('disconnect.quitting');
+        res.status(200).send({ message: "Bot stop command received. Disconnecting." });
+    } else {
+        res.status(404).send({ message: "Bot not found or not running for this chat." });
+        cleanupBot(chatId); // Просто очистим, если был только объект состояния
+    }
+});
 
 
-// --- ЗАПУСК СЕРВЕРА (Без изменений) ---
+// /api/command
+app.post('/api/command', (req, res) => {
+    const { chatId, command } = req.body;
+    
+    if (!chatId || !command) {
+        return res.status(400).send({ error: "Missing required parameters: chatId or command." });
+    }
+
+    if (activeBots[chatId] && activeBots[chatId].bot) {
+        try {
+            activeBots[chatId].bot.chat(command);
+            res.status(200).send({ message: `Command '${command}' sent to bot.` });
+        } catch (e) {
+            console.error(`[Chat ${chatId}] Failed to send command: ${e.message}`);
+            res.status(500).send({ error: `Failed to send command: ${e.message}` });
+        }
+    } else {
+        res.status(404).send({ message: "Bot not found or not running." });
+    }
+});
+
+
+// --- ЗАПУСК СЕРВЕРА ---
 app.listen(PORT, () => {
     console.log(`Worker service running on port ${PORT}`);
 });
