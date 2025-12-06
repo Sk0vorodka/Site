@@ -1,24 +1,48 @@
 const mineflayer = require('mineflayer');
 const TelegramBot = require('node-telegram-bot-api');
 
-// --- Переменные окружения для Render (Только для доступа!) ---
-// Мы оставляем здесь только токен и chat_id, чтобы бот мог работать и отправлять уведомления
+// --- Переменные окружения для Render ---
 const telegramToken = process.env.TELEGRAM_TOKEN;
 const chatId = process.env.CHAT_ID;
+const port = process.env.PORT || 80; // Порт для Webhook, предоставляемый Render
+const url = process.env.RENDER_EXTERNAL_HOSTNAME; // Адрес сервиса Render
 
-if (!telegramToken || !chatId) {
-  console.error('ОШИБКА: Не заданы необходимые переменные окружения: TELEGRAM_TOKEN или CHAT_ID.');
+if (!telegramToken || !chatId || !url) {
+  console.error('ОШИБКА: Не заданы необходимые переменные окружения: TELEGRAM_TOKEN, CHAT_ID, или RENDER_EXTERNAL_HOSTNAME. Убедитесь, что Web Service активен.');
   process.exit(1);
 }
 
-const bot = new TelegramBot(telegramToken, { polling: true });
+// --- Инициализация Telegram бота с Webhooks ---
+const bot = new TelegramBot(telegramToken, { 
+    polling: false // Отключаем Polling
+});
 
-// --- Переменные для хранения настроек сервера ---
+// Установка Webhook: Telegram будет отправлять обновления на этот адрес
+bot.setWebHook(`https://${url}/bot${telegramToken}`, { allowed_updates: ["message", "callback_query"] });
+
+// Запуск прослушивания HTTP-запросов от Telegram
+bot.openWebHook();
+
+// --- Глобальное состояние бота ---
 let isBotStarted = false;
 let mcBotInstance = null;
 let currentHost = null;
 let currentPort = null;
-const botUsername = 'BotUrolz'; // Имя бота остается постоянным
+let botUsername = 'BotUrolz'; 
+let awaitingUsername = false; 
+
+// --- Инлайн-клавиатура для управления ---
+function getMainMenuKeyboard() {
+    return {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '▶️ Запустить бота', callback_data: 'start_bot' }, { text: '⏹ Выключить бота', callback_data: 'stop_bot' }],
+                [{ text: '⚙️ Сменить сервер (домен:порт)', callback_data: 'set_server_prompt' }],
+                [{ text: `👤 Сменить имя бота (Текущее: ${botUsername})`, callback_data: 'set_username_prompt' }]
+            ]
+        }
+    };
+}
 
 // Переменные для управления переподключением
 let reconnectAttempts = 0;
@@ -31,12 +55,11 @@ setInterval(() => {
   reconnectAttempts = 0;
 }, resetAttemptsInterval);
 
-// Функция для Anti-AFK
+// --- Функции Mineflayer ---
+
 function performRandomAction(mcBot) {
-  if (!mcBot) {
-    return;
-  }
-  // ... (логика Anti-AFK остается прежней)
+  if (!mcBot) return;
+  
   const actions = ['jump', 'move', 'rotate'];
   const action = actions[Math.floor(Math.random() * actions.length)];
 
@@ -55,15 +78,13 @@ function performRandomAction(mcBot) {
   }
 }
 
-
-// Функция создания Minecraft бота (теперь использует глобальные переменные)
 function createMinecraftBot() {
   if (reconnectAttempts >= maxReconnectAttempts) {
     bot.sendMessage(chatId, 'Превышено количество попыток подключения к Minecraft-серверу. Бот остановлен.');
+    isBotStarted = false;
     return;
   }
   
-  // Проверка, установлены ли хост и порт
   if (!currentHost || !currentPort) {
       bot.sendMessage(chatId, '❌ Не задан адрес сервера. Используйте команду /setserver.');
       isBotStarted = false;
@@ -72,6 +93,7 @@ function createMinecraftBot() {
 
   if (mcBotInstance) {
       mcBotInstance.quit();
+      mcBotInstance = null;
   }
 
   const botOptions = {
@@ -86,11 +108,9 @@ function createMinecraftBot() {
   let afkIntervalId = null; 
 
   mcBot.on('login', () => {
-    console.log(`Minecraft бот подключился к серверу.`);
-    bot.sendMessage(chatId, `✅ Бот подключился: ${currentHost}:${currentPort}`);
+    bot.sendMessage(chatId, `✅ Бот **${botUsername}** подключился: ${currentHost}:${currentPort}`, { parse_mode: 'Markdown' });
     reconnectAttempts = 0;
 
-    // Запускаем Anti-AFK
     if (!afkIntervalId) {
       afkIntervalId = setInterval(() => {
           performRandomAction(mcBot);
@@ -99,12 +119,10 @@ function createMinecraftBot() {
 
     setTimeout(() => {
       mcBot.chat('/register 1R2r3 1R2r3');
-      console.log('Отправлена команда: /register 1R2r3 1R2r3');
     }, 5000);
   });
 
   mcBot.on('end', (reason) => {
-    console.log(`Minecraft бот отключен. Причина: ${reason}`);
     bot.sendMessage(chatId, `❌ Бот был отключен (${reason}). Попытка переподключения.`);
     reconnectAttempts++;
 
@@ -116,14 +134,12 @@ function createMinecraftBot() {
     if (reconnectAttempts < maxReconnectAttempts) {
       setTimeout(createMinecraftBot, reconnectInterval);
     } else {
-      console.log('Достигнуто максимальное количество попыток подключения.');
       bot.sendMessage(chatId, '❗️ Достигнуто максимальное количество попыток подключения. Бот остановлен.');
       isBotStarted = false;
     }
   });
 
   mcBot.on('error', (err) => {
-    console.error('Произошла ошибка: ', err.message);
     bot.sendMessage(chatId, `⚠️ Произошла ошибка: ${err.message}.`);
   });
 
@@ -134,7 +150,6 @@ function createMinecraftBot() {
     }, 5000);
   });
   
-  // Логика обнаружения клона
   mcBot.on('players', (players) => {
     let botCount = 0;
     for (let player in players) {
@@ -149,9 +164,92 @@ function createMinecraftBot() {
   });
 }
 
+// --- Хелперы для кнопок ---
+function handleStopBot(msg) {
+    if (isBotStarted && mcBotInstance) {
+        mcBotInstance.quit();
+        isBotStarted = false;
+        mcBotInstance = null;
+        bot.sendMessage(chatId, '⏹ Minecraft бот безопасно остановлен и отключен от сервера.');
+    } else {
+        bot.sendMessage(chatId, 'Бот не запущен.');
+    }
+}
+
+function handleStartBot(msg) {
+    if (!currentHost || !currentPort) {
+        bot.sendMessage(chatId, '⚠️ Сначала задайте адрес сервера, используя кнопку "Сменить сервер".');
+        return;
+    }
+
+    if (!isBotStarted) {
+        bot.sendMessage(msg.chat.id, `Запускаю Minecraft бота **${botUsername}**...`, { parse_mode: 'Markdown' });
+        createMinecraftBot();
+        isBotStarted = true;
+
+        // Таймер для отправки статуса каждые 60 минут
+        setInterval(() => {
+          if (isBotStarted) {
+            bot.sendMessage(chatId, 'Minecraft бот работает нормально.');
+          }
+        }, 60 * 60 * 1000);
+       
+    } else {
+        bot.sendMessage(msg.chat.id, 'Minecraft бот уже запущен.');
+    }
+}
+
+
 // --- Обработка команд Telegram ---
 
-// 1. Команда для установки сервера
+// 1. Команда /menu или /start для отображения главного меню
+bot.onText(/\/start|\/menu/, (msg) => {
+    if (String(msg.chat.id) !== chatId) {
+        bot.sendMessage(msg.chat.id, '❌ У вас нет прав для управления этим ботом.');
+        return;
+    }
+    
+    let statusText = isBotStarted ? '🟢 Подключен' : '🔴 Отключен';
+    let serverText = currentHost ? `${currentHost}:${currentPort}` : 'Не задан';
+
+    const messageText = `⚙️ **Панель управления ботом**\n\nСтатус: **${statusText}**\nСервер: **${serverText}**\nИмя бота: **${botUsername}**`;
+    
+    bot.sendMessage(chatId, messageText, { 
+        parse_mode: 'Markdown', 
+        reply_markup: getMainMenuKeyboard().reply_markup 
+    });
+});
+
+// 2. Обработка нажатий на инлайн-кнопки
+bot.on('callback_query', (query) => {
+    const data = query.data;
+    const msg = query.message;
+    
+    if (String(msg.chat.id) !== chatId) {
+        bot.answerCallbackQuery(query.id, { text: 'Нет доступа.' });
+        return;
+    }
+    
+    bot.answerCallbackQuery(query.id); 
+
+    switch (data) {
+        case 'start_bot':
+            handleStartBot(msg);
+            break;
+        case 'stop_bot':
+            handleStopBot(msg);
+            break;
+        case 'set_server_prompt':
+            bot.sendMessage(chatId, '💬 Отправьте адрес сервера в формате: `/setserver домен:порт` (например: `/setserver test.aternos.me:17484`)', { parse_mode: 'Markdown' });
+            break;
+        case 'set_username_prompt':
+            awaitingUsername = true;
+            bot.sendMessage(chatId, '💬 **Отправьте новое имя** для Minecraft бота. (Имя должно быть от 3 до 16 символов без пробелов)', { parse_mode: 'Markdown' });
+            break;
+    }
+});
+
+// 3. Команда /setserver для установки сервера
 bot.onText(/\/setserver (.+)/, (msg, match) => {
     if (String(msg.chat.id) !== chatId) return;
 
@@ -162,57 +260,58 @@ bot.onText(/\/setserver (.+)/, (msg, match) => {
         currentHost = parts[0].trim();
         currentPort = parseInt(parts[1].trim(), 10);
         
-        bot.sendMessage(chatId, `✅ Сервер установлен: **${currentHost}:${currentPort}**.\nТеперь вы можете запустить бота командой /start.`, { parse_mode: 'Markdown' });
+        bot.sendMessage(chatId, `✅ Сервер установлен: **${currentHost}:${currentPort}**.\nЗапустите бота через /menu.`, { parse_mode: 'Markdown' });
         
-        // Если бот уже был запущен, перезапускаем его с новыми данными
-        if (isBotStarted) {
-            if (mcBotInstance) mcBotInstance.quit();
-            isBotStarted = false;
-            bot.sendMessage(chatId, '🔄 Перезапускаю бота с новыми настройками...');
-            // Запуск произойдет через команду Ab1R, которую нужно будет отправить повторно
+        if (isBotStarted && mcBotInstance) {
+            handleStopBot(msg);
+            bot.sendMessage(chatId, '🔄 Бот остановлен для применения новых настроек. Запустите его снова через /menu.');
         }
 
     } else {
-        bot.sendMessage(chatId, '❌ Неверный формат. Используйте: `/setserver домен:порт` (например: `/setserver test.aternos.me:17484`)', { parse_mode: 'Markdown' });
+        bot.sendMessage(chatId, '❌ Неверный формат. Используйте: `/setserver домен:порт`', { parse_mode: 'Markdown' });
     }
 });
 
-// 2. Команда /start
-bot.onText(/\/start/, (msg) => {
-  if (String(msg.chat.id) !== chatId) {
-      bot.sendMessage(msg.chat.id, '❌ У вас нет прав для управления этим ботом.');
-      return;
-  }
-  
-  if (!currentHost || !currentPort) {
-      bot.sendMessage(chatId, '⚠️ Сначала задайте адрес сервера, используя команду: `/setserver домен:порт`', { parse_mode: 'Markdown' });
-      return;
-  }
-  
-  bot.sendMessage(msg.chat.id, 'Введите специальный код для запуска Minecraft бота.');
+// 4. Обработка всех остальных сообщений (для захвата нового имени)
+bot.on('message', (msg) => {
+    // Игнорируем команды и сообщения, которые не пришли от нас или не ожидают ответа
+    if (String(msg.chat.id) !== chatId || msg.text.startsWith('/')) return; 
+
+    // Логика захвата нового имени
+    if (awaitingUsername) {
+        const newUsername = msg.text.trim();
+        
+        if (newUsername.length > 16 || newUsername.length < 3 || newUsername.includes(' ')) {
+            bot.sendMessage(chatId, '❌ Имя должно быть от 3 до 16 символов и не содержать пробелов. Попробуйте снова.');
+            return;
+        }
+        
+        botUsername = newUsername;
+        awaitingUsername = false;
+        
+        if (isBotStarted && mcBotInstance) {
+            handleStopBot(msg);
+            bot.sendMessage(chatId, `✅ Имя бота успешно изменено на **${botUsername}**. Бот был остановлен. Запустите его снова через /menu.`, { parse_mode: 'Markdown' });
+        } else {
+            bot.sendMessage(chatId, `✅ Имя бота успешно изменено на **${botUsername}**.\nЗапустите бота через /menu.`, { parse_mode: 'Markdown' });
+        }
+    }
 });
 
-// 3. Команда Ab1R (запуск)
-bot.onText(/Ab1R/, (msg) => {
-  if (String(msg.chat.id) !== chatId) return;
-  
-  if (!currentHost || !currentPort) {
-       bot.sendMessage(chatId, '⚠️ Сначала задайте адрес сервера, используя команду: `/setserver домен:порт`', { parse_mode: 'Markdown' });
-      return;
-  }
+// 5. Обработчик для прослушивания порта Webhook
+require('http').createServer((req, res) => {
+  bot.processUpdate(req.body); // Обрабатываем входящие Webhook'и
+  res.end('OK');
+}).listen(port);
 
-  if (!isBotStarted) {
-    bot.sendMessage(msg.chat.id, 'Код правильный. Запускаю Minecraft бота...');
-    createMinecraftBot();
-    isBotStarted = true;
+// Выводим в лог, где Render должен слушать запросы
+console.log(`Сервер Webhook запущен и слушает порт ${port}`);
 
-    // Таймер для отправки статуса каждые 60 минут
-    setInterval(() => {
-      if (isBotStarted) {
-        bot.sendMessage(chatId, 'Minecraft бот работает нормально.');
-      }
-    }, 60 * 60 * 1000);
-  } else {
-    bot.sendMessage(msg.chat.id, 'Minecraft бот уже запущен.');
-  }
+// Очистка хука при остановке (помогает избежать конфликтов)
+process.on('SIGINT', () => {
+  console.log('Получен сигнал SIGINT. Удаление Webhook...');
+  bot.deleteWebHook().then(() => {
+    console.log('Webhook успешно удален. Завершение работы.');
+    process.exit();
+  });
 });
