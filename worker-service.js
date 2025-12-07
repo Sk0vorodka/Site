@@ -1,7 +1,6 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
-// import node-fetch будет происходить динамически, чтобы не ломать старые версии Node.
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -103,9 +102,34 @@ function parseProxyList(rawContent) {
         .filter(proxy => !isNaN(proxy.port));
 }
 
-[Proxy Manager] Загрузка списка прокси с внешнего URL...
-[Proxy Manager] ОШИБКА при загрузке прокси-листа: Ошибка HTTP: 403 Forbidden
-[Chat 7822370920] Нет доступных прокси. Отключение.
+async function fetchAndParseProxyList() {
+    try {
+        const { default: fetch } = await import('node-fetch'); 
+        console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL...');
+        
+        // --- 🟢 ИСПРАВЛЕНИЕ 403: ДОБАВЛЕНИЕ ЗАГОЛОВКА USER-AGENT ---
+        const response = await fetch(PROXY_LIST_URL, {
+            headers: {
+                // Имитация запроса от браузера Chrome
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Ошибка HTTP: ${response.status} ${response.statusText}`);
+        }
+        
+        const rawText = await response.text();
+        const parsedList = parseProxyList(rawText);
+        
+        console.log(`[Proxy Manager] Успешно загружено и обработано ${parsedList.length} прокси.`);
+        return parsedList;
+        
+    } catch (e) {
+        console.error(`[Proxy Manager] ОШИБКА при загрузке прокси-листа: ${e.message}`);
+        return [];
+    }
+}
 
 
 // --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ ---
