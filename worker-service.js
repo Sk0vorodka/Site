@@ -103,28 +103,9 @@ function parseProxyList(rawContent) {
         .filter(proxy => !isNaN(proxy.port));
 }
 
-async function fetchAndParseProxyList() {
-    try {
-        const { default: fetch } = await import('node-fetch'); 
-        console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL...');
-        
-        const response = await fetch(PROXY_LIST_URL);
-        
-        if (!response.ok) {
-            throw new Error(`Ошибка HTTP: ${response.status} ${response.statusText}`);
-        }
-        
-        const rawText = await response.text();
-        const parsedList = parseProxyList(rawText);
-        
-        console.log(`[Proxy Manager] Успешно загружено и обработано ${parsedList.length} прокси.`);
-        return parsedList;
-        
-    } catch (e) {
-        console.error(`[Proxy Manager] ОШИБКА при загрузке прокси-листа: ${e.message}`);
-        return [];
-    }
-}
+[Proxy Manager] Загрузка списка прокси с внешнего URL...
+[Proxy Manager] ОШИБКА при загрузке прокси-листа: Ошибка HTTP: 403 Forbidden
+[Chat 7822370920] Нет доступных прокси. Отключение.
 
 
 // --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ ---
