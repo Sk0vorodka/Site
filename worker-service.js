@@ -107,12 +107,14 @@ async function fetchAndParseProxyList() {
         const { default: fetch } = await import('node-fetch'); 
         console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL...');
         
-        // --- 🟢 ИСПРАВЛЕНИЕ 403: ДОБАВЛЕНИЕ ЗАГОЛОВКА USER-AGENT ---
+        // --- 🟢 ИСПРАВЛЕНИЕ 403: ДОБАВЛЕНИЕ USER-AGENT И REFERER ---
         const response = await fetch(PROXY_LIST_URL, {
             headers: {
-                // Имитация запроса от браузера Chrome
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-            }
+                // Добавляем Referer, чтобы имитировать переход с внешней страницы
+                'Referer': 'https://www.google.com/', 
+            },
+            redirect: 'follow' // Убеждаемся, что идем по редиректам, если они есть
         });
         
         if (!response.ok) {
