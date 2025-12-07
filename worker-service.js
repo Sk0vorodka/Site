@@ -17,6 +17,7 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 // --- КОНФИГУРАЦИЯ ПРОКСИ ---
 // ✅ СПИСОК ВАШИХ SOCKS5 ПРОКСИ
 const PROXY_LIST = [
+    { host: '5.164.51.243', port: 1080 },
     { host: '85.172.55.85', port: 1080 },
     { host: '84.252.70.254', port: 1080 },
     { host: '95.78.119.94', port: 1080 },
