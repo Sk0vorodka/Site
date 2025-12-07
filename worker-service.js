@@ -13,13 +13,13 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 
 // ----------------------------------------------------------------------
-// --- ⚠️ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (Новый JSON URL) ---
+// --- ⚠️ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА ---
 const PROXY_LIST_URL = 'https://sockslist.us/Api?request=display&country=all&level=all&token=free'; 
-let PROXY_LIST = []; // Список будет загружен асинхронно
+let PROXY_LIST = []; 
 // --- КОНЕЦ КОНФИГУРАЦИИ ПРОКСИ ---
 // ----------------------------------------------------------------------
 
-const activeBots = {}; // Хранит состояние активных ботов
+const activeBots = {}; 
 
 // --- КОНФИГУРАЦИЯ EXPRESS ---
 app.use(bodyParser.json());
@@ -31,16 +31,14 @@ app.get('/', (req, res) => {
 // --- ФУНКЦИИ УВЕДОМЛЕНИЙ ---
 
 async function sendNotification(chatId, message) {
+    // ВНИМАНИЕ: Если флаг isStopping установлен, эта функция не вызывается
+    // в основном цикле, чтобы избежать спама.
     try {
         const { default: fetch } = await import('node-fetch'); 
 
-        if (!TELEGRAM_TOKEN) {
-            console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
-            return;
-        }
+        if (!TELEGRAM_TOKEN) return console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
         
-        // --- ИСПРАВЛЕНИЕ: МАКСИМАЛЬНО ПРОСТОЕ ЭКРАНИРОВАНИЕ ---
-        // Экранируем только символы, которые часто встречаются в именах серверов/пользователей
+        // Упрощенное экранирование для надежности
         const escapedMessage = message.replace(/[().!]/g, '\\$&');
 
         const url = `${BASE_TELEGRAM_URL}/sendMessage`;
@@ -56,13 +54,9 @@ async function sendNotification(chatId, message) {
             body: JSON.stringify(payload)
         });
         
-        // Запасной вариант на случай ошибки MarkdownV2 (оставляем, но упрощаем)
         if (!response.ok && response.status === 400) {
             console.warn(`[Chat ${chatId}] Ошибка MarkdownV2, отправляю обычный текст.`);
-            const plainPayload = {
-                chat_id: chatId,
-                text: `[RAW] ${message}` 
-            };
+            const plainPayload = { chat_id: chatId, text: `[RAW] ${message}` };
             response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -88,12 +82,11 @@ function cleanupBot(chatId) {
 
 
 // --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ ---
-
 async function fetchAndParseProxyList() {
     try {
         const { default: fetch } = await import('node-fetch'); 
         console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL (JSON)...');
-        
+        // ... (логика загрузки)
         const response = await fetch(PROXY_LIST_URL, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -102,27 +95,18 @@ async function fetchAndParseProxyList() {
             redirect: 'follow'
         });
         
-        if (!response.ok) {
-            throw new Error(`Ошибка HTTP: ${response.status} ${response.statusText}`);
-        }
+        if (!response.ok) throw new Error(`Ошибка HTTP: ${response.status} ${response.statusText}`);
         
         const jsonList = await response.json();
-
-        if (!Array.isArray(jsonList)) {
-             throw new Error("Ответ API не является массивом.");
-        }
+        if (!Array.isArray(jsonList)) throw new Error("Ответ API не является массивом.");
         
         const parsedList = jsonList
             .filter(item => item.ip && item.port)
-            .map(item => ({
-                host: item.ip.trim(),
-                port: parseInt(item.port)
-            }))
+            .map(item => ({ host: item.ip.trim(), port: parseInt(item.port) }))
             .filter(proxy => !isNaN(proxy.port));
         
         console.log(`[Proxy Manager] Успешно загружено и обработано ${parsedList.length} прокси.`);
         return parsedList;
-        
     } catch (e) {
         console.error(`[Proxy Manager] ОШИБКА при загрузке прокси-листа: ${e.message}`);
         return [];
@@ -130,7 +114,7 @@ async function fetchAndParseProxyList() {
 }
 
 
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ (ДОБАВЛЕН ФЛАГ isStopping) ---
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ ---
 
 async function setupMineflayerBot(chatId, host, port, username) {
     const maxAttempts = 5; 
@@ -156,7 +140,6 @@ async function setupMineflayerBot(chatId, host, port, username) {
     }
 
     if (!data) {
-        // !!! ДОБАВЛЕН ФЛАГ isStopping !!!
         data = { bot: null, host, port, username, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false, isStopping: false };
         activeBots[chatId] = data;
     } else {
@@ -164,7 +147,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
         data.port = port;
         data.username = username;
         data.bot = null;
-        data.isStopping = false; // Сбрасываем при запуске
+        data.isStopping = false; 
     }
 
 
@@ -180,10 +163,8 @@ async function setupMineflayerBot(chatId, host, port, username) {
 
     const currentProxy = PROXY_LIST[currentIndex];
     
-    // 📢 КРИТИЧЕСКОЕ ЛОГИРОВАНИЕ 📢
     console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
 
-    // 3. Создание бота
     const bot = mineflayer.createBot({
         host: host, 
         port: parseInt(port), 
@@ -193,7 +174,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
         proxy: {
             host: currentProxy.host,
             port: currentProxy.port,
-            type: 5 // SOCKS5
+            type: 5 
         }
     });
 
@@ -207,7 +188,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
         
         if (activeBots[chatId]) {
             activeBots[chatId].reconnectAttempts = 0; 
-            activeBots[chatId].currentProxyIndex = 0; // Сброс индекса при успехе
+            activeBots[chatId].currentProxyIndex = 0; 
         }
     });
 
@@ -230,16 +211,15 @@ async function setupMineflayerBot(chatId, host, port, username) {
         const data = activeBots[chatId];
         if (!data) return cleanupBot(chatId);
         
-        // !!! ПРОВЕРКА ФЛАГА isStopping !!!
+        // !!! ГЛАВНОЕ ИСПРАВЛЕНИЕ: ПРОВЕРКА ФЛАГА ОСТАНОВКИ !!!
         if (data.isStopping) {
-            console.log(`[Chat ${chatId}] Остановка по команде пользователя.`);
-            sendNotification(chatId, `⏹ Бот полностью остановлен по команде\\.`, 'MarkdownV2');
+            console.log(`[Chat ${chatId}] Остановка по команде пользователя. Подавление уведомлений.`);
+            // Не отправляем уведомление, просто очищаем ресурсы.
             return cleanupBot(chatId);
         }
-
+        
         // 1. Специальные причины для немедленного выхода
-        if (reason === 'disconnect.quitting' || reason === 'disconnect.cleanup') {
-            // Если isStopping был установлен через /api/stop, то обработка выше уже сработала
+        if (reason === 'disconnect.cleanup') {
             return cleanupBot(chatId);
         }
 
@@ -286,9 +266,8 @@ async function setupMineflayerBot(chatId, host, port, username) {
 }
 
 
-// --- API ЭНДПОИНТЫ (Обновлены для isStopping) ---
+// --- API ЭНДПОИНТЫ ---
 
-// /api/start
 app.post('/api/start', async (req, res) => {
     const { chatId, host, port, username } = req.body;
     
@@ -300,7 +279,7 @@ app.post('/api/start', async (req, res) => {
         if (activeBots[chatId]) {
             activeBots[chatId].reconnectAttempts = 0;
             activeBots[chatId].currentProxyIndex = 0; 
-            activeBots[chatId].isStopping = false; // Сбрасываем флаг при новом запуске
+            activeBots[chatId].isStopping = false; 
         }
         await setupMineflayerBot(chatId, host, port, username);
         res.status(200).send({ message: "Bot start command received." });
@@ -309,7 +288,6 @@ app.post('/api/start', async (req, res) => {
     }
 });
 
-// /api/stop
 app.post('/api/stop', (req, res) => {
     const { chatId } = req.body;
     if (!chatId) {
@@ -317,9 +295,10 @@ app.post('/api/stop', (req, res) => {
     }
 
     if (activeBots[chatId] && activeBots[chatId].bot) {
-        // !!! Устанавливаем флаг isStopping перед отключением !!!
+        // Устанавливаем флаг isStopping
         activeBots[chatId].isStopping = true; 
         activeBots[chatId].bot.quit('disconnect.quitting');
+        // Отправляем ответ, и бот в ТГ сам пришлет финальное сообщение об остановке
         res.status(200).send({ message: "Bot stop command received. Disconnecting." });
     } else {
         res.status(404).send({ message: "Bot not found or not running for this chat." });
@@ -328,7 +307,6 @@ app.post('/api/stop', (req, res) => {
 });
 
 
-// /api/command
 app.post('/api/command', (req, res) => {
     const { chatId, command } = req.body;
     
