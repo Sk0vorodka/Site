@@ -14,8 +14,8 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // ----------------------------------------------------------------------
 // --- ⚠️ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА ---
-const PROXY_LIST_URL = 'https://sockslist.us/Api?request=display&country=all&level=all&token=free'; 
-let PROXY_LIST = []; 
+const PROXY_LIST_URL = null; // Отключаем загрузку по URL
+let PROXY_LIST = [{ host: 'router.comss.one', port: 1080 }]; 
 // --- КОНЕЦ КОНФИГУРАЦИИ ПРОКСИ ---
 // ----------------------------------------------------------------------
 
