@@ -13,32 +13,28 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 
 // ----------------------------------------------------------------------
-// --- ⚠️ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА ---
-const PROXY_LIST_URL = null; // Отключаем загрузку по URL
-let PROXY_LIST = [{ host: 'router.comss.one', port: 1080 }]; 
+// --- ⚠️ ФИНАЛЬНАЯ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (Ваш новый адрес) ---
+// В режиме теста мы используем только один адрес.
+const PROXY_LIST_URL = null; // Отключено
+let PROXY_LIST = [{ host: '67.210.146.50', port: 11080 }]; 
 // --- КОНЕЦ КОНФИГУРАЦИИ ПРОКСИ ---
 // ----------------------------------------------------------------------
 
 const activeBots = {}; 
 
-// --- КОНФИГУРАЦИЯ EXPRESS ---
-app.use(bodyParser.json());
-
-app.get('/', (req, res) => {
-    res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
-});
-
-// --- ФУНКЦИИ УВЕДОМЛЕНИЙ ---
-
+// --- ФУНКЦИИ УВЕДОМЛЕНИЙ (С подавлением спама) ---
 async function sendNotification(chatId, message) {
-    // ВНИМАНИЕ: Если флаг isStopping установлен, эта функция не вызывается
-    // в основном цикле, чтобы избежать спама.
+    // Безопасная проверка: если бот помечен как останавливаемый, не отправляем уведомления!
+    const data = activeBots[chatId];
+    if (data && data.isStopping) {
+        return; 
+    }
+
     try {
         const { default: fetch } = await import('node-fetch'); 
 
         if (!TELEGRAM_TOKEN) return console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
         
-        // Упрощенное экранирование для надежности
         const escapedMessage = message.replace(/[().!]/g, '\\$&');
 
         const url = `${BASE_TELEGRAM_URL}/sendMessage`;
@@ -83,6 +79,9 @@ function cleanupBot(chatId) {
 
 // --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ ---
 async function fetchAndParseProxyList() {
+    // В этом коде эта функция будет проигнорирована, так как PROXY_LIST уже содержит адрес.
+    if (!PROXY_LIST_URL) return PROXY_LIST; 
+    
     try {
         const { default: fetch } = await import('node-fetch'); 
         console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL (JSON)...');
@@ -114,7 +113,7 @@ async function fetchAndParseProxyList() {
 }
 
 
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ ---
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
 
 async function setupMineflayerBot(chatId, host, port, username) {
     const maxAttempts = 5; 
@@ -125,7 +124,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
         
         if (PROXY_LIST.length === 0) {
             console.log(`[Chat ${chatId}] Нет доступных прокси. Отключение.`);
-            sendNotification(chatId, `🛑 Не удалось загрузить прокси-лист с ${PROXY_LIST_URL}\\. Проверьте ссылку\\.`, 'MarkdownV2');
+            sendNotification(chatId, `🛑 Не удалось загрузить прокси-лист\\.`, 'MarkdownV2');
             return cleanupBot(chatId);
         }
     }
@@ -151,7 +150,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
     }
 
 
-    // 2. Проверка ротации
+    // 2. Проверка ротации (даже если 1 прокси)
     const currentIndex = data.currentProxyIndex;
     
     if (currentIndex >= PROXY_LIST.length) {
@@ -209,21 +208,20 @@ async function setupMineflayerBot(chatId, host, port, username) {
         console.log(`[Chat ${chatId}] Бот отключен. Причина: ${reason}`);
         
         const data = activeBots[chatId];
-        if (!data) return cleanupBot(chatId);
+        if (!data) return; 
         
-        // !!! ГЛАВНОЕ ИСПРАВЛЕНИЕ: ПРОВЕРКА ФЛАГА ОСТАНОВКИ !!!
+        // 1. ФИНАЛЬНАЯ ПРОВЕРКА ФЛАГА ОСТАНОВКИ
         if (data.isStopping) {
             console.log(`[Chat ${chatId}] Остановка по команде пользователя. Подавление уведомлений.`);
-            // Не отправляем уведомление, просто очищаем ресурсы.
             return cleanupBot(chatId);
         }
         
-        // 1. Специальные причины для немедленного выхода
+        // 2. Специальные причины для немедленного выхода
         if (reason === 'disconnect.cleanup') {
             return cleanupBot(chatId);
         }
 
-        // 2. Логика ротации прокси
+        // 3. Логика ротации прокси
         if (data.isProxyFailure || reason === 'socketClosed') { 
             data.isProxyFailure = false; 
             data.currentProxyIndex++;     
@@ -243,7 +241,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
             }
         }
         
-        // 3. Стандартный реконнект 
+        // 4. Стандартный реконнект 
         data.reconnectAttempts++;
 
         if (data.reconnectAttempts < maxAttempts) {
@@ -295,10 +293,8 @@ app.post('/api/stop', (req, res) => {
     }
 
     if (activeBots[chatId] && activeBots[chatId].bot) {
-        // Устанавливаем флаг isStopping
         activeBots[chatId].isStopping = true; 
         activeBots[chatId].bot.quit('disconnect.quitting');
-        // Отправляем ответ, и бот в ТГ сам пришлет финальное сообщение об остановке
         res.status(200).send({ message: "Bot stop command received. Disconnecting." });
     } else {
         res.status(404).send({ message: "Bot not found or not running for this chat." });
