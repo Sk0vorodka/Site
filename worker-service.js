@@ -16,16 +16,9 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 // --- 🔑 КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (С АУТЕНТИФИКАЦИЕЙ) ---
 const PROXY_LIST_URL = null; // Отключено
 let PROXY_LIST = [
-    { host: '142.111.48.253', port: 7030, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '31.59.20.176', port: 6754, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '23.95.150.145', port: 6114, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '198.23.239.134', port: 6540, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '107.172.163.27', port: 6543, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '198.105.121.200', port: 6462, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '64.137.96.74', port: 6641, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '84.247.60.125', port: 6095, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '216.10.27.159', port: 6837, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
-    { host: '142.111.67.146', port: 5611, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } }
+    { host: '193.233.254.10', port: 1080 } },
+    { host: '84.252.70.254', port: 1080 } }, 
+    { host: '192.241.156.17', port: 1080 } }
 ]; 
 // --- КОНЕЦ КОНФИГУРАЦИИ ПРОКСИ ---
 // ----------------------------------------------------------------------
