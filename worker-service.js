@@ -17,7 +17,7 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 // --- КОНФИГУРАЦИЯ ПРОКСИ ---
 // ✅ СПИСОК ВАШИХ SOCKS5 ПРОКСИ
 const PROXY_LIST = [
-    { host: '5.164.51.243', port: 1080 },
+    { host: '5.164.51.243', port: 1080 }, // <-- ВАШ НОВЫЙ IP АДРЕС (Используется порт 1080)
     { host: '85.172.55.85', port: 1080 },
     { host: '84.252.70.254', port: 1080 },
     { host: '95.78.119.94', port: 1080 },
@@ -117,14 +117,17 @@ function setupMineflayerBot(chatId, host, port, username) {
         data = { bot: null, host, port, username, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false };
         activeBots[chatId] = data;
     } else {
-        // Обновление данных сеанса (если был /start)
+        // Обновление данных сеанса (если был /start или реконнект)
         data.host = host;
         data.port = port;
         data.username = username;
-        // При явном запуске команды /start сбрасываем попытки и индекс прокси
-        if (data.reconnectAttempts === 0) {
-             data.currentProxyIndex = 0; 
-        }
+        
+        // --- ИСПРАВЛЕНИЕ БАГА РОТАЦИИ ПРОКСИ ---
+        // Убрано ошибочное условие, которое сбрасывало currentProxyIndex
+        // во время рекурсивного вызова. Сброс теперь происходит только 
+        // в API-эндпоинте /api/start.
+        // ------------------------------------
+        
         data.bot = null;
     }
 
@@ -178,9 +181,9 @@ function setupMineflayerBot(chatId, host, port, username) {
         
         const data = activeBots[chatId];
         if (data) {
-            // Если ошибка связана с прокси/сетью (ECONNRESET, ETIMEDOUT), ставим флаг для ротации
-            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT')) {
-                data.isProxyFailure = true;
+            // Если ошибка связана с прокси/сетью (ECONNRESET, ETIMEDOUT, socketClosed), ставим флаг для ротации
+            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed')) {
+                 data.isProxyFailure = true; 
             }
             data.bot.quit('disconnect.error'); // Триггерим событие 'end'
         }
@@ -198,8 +201,8 @@ function setupMineflayerBot(chatId, host, port, username) {
             return cleanupBot(chatId);
         }
 
-        // 2. Логика ротации прокси (срабатывает после ошибки подключения)
-        if (data.isProxyFailure) {
+        // 2. Логика ротации прокси (срабатывает после ошибки подключения или socketClosed)
+        if (data.isProxyFailure || reason === 'socketClosed') { 
             data.isProxyFailure = false; // Сброс флага
             data.currentProxyIndex++;     // Переходим к следующему прокси
             
@@ -244,12 +247,12 @@ function setupMineflayerBot(chatId, host, port, username) {
 }
 
 
-// --- API ЭНДПОИНТЫ (Без изменений) ---
+// --- API ЭНДПОИНТЫ ---
 
 // /api/start
 app.post('/api/start', (req, res) => {
     const { chatId, host, port, username } = req.body;
-    // ... (проверка параметров)
+    
     if (!chatId || !host || !port || !username) {
         return res.status(400).send({ error: "Missing required parameters: chatId, host, port, or username." });
     }
@@ -279,7 +282,7 @@ app.post('/api/stop', (req, res) => {
         res.status(200).send({ message: "Bot stop command received. Disconnecting." });
     } else {
         res.status(404).send({ message: "Bot not found or not running for this chat." });
-        cleanupBot(chatId); // Просто очистим, если был только объект состояния
+        cleanupBot(chatId); 
     }
 });
 
