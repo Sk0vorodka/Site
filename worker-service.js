@@ -12,7 +12,7 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // --- НАСТРОЙКИ ПРОКСИ ---
 // Используем ваш домен для обхода блокировки Aternos
-const PROXY_HOST = 'dns.nullsproxy.com'; 
+const PROXY_HOST = 'dns.comss.one'; 
 const PROXY_PORT = 1080; 
 // --- КОНЕЦ НАСТРОЕК ПРОКСИ ---
 
