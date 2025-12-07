@@ -32,7 +32,6 @@ app.get('/', (req, res) => {
 
 async function sendNotification(chatId, message) {
     try {
-        // Динамический импорт node-fetch
         const { default: fetch } = await import('node-fetch'); 
 
         if (!TELEGRAM_TOKEN) {
@@ -40,8 +39,9 @@ async function sendNotification(chatId, message) {
             return;
         }
         
-        // Экранирование для MarkdownV2
-        const escapedMessage = message.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+        // --- ИСПРАВЛЕНИЕ: МАКСИМАЛЬНО ПРОСТОЕ ЭКРАНИРОВАНИЕ ---
+        // Экранируем только символы, которые часто встречаются в именах серверов/пользователей
+        const escapedMessage = message.replace(/[().!]/g, '\\$&');
 
         const url = `${BASE_TELEGRAM_URL}/sendMessage`;
         const payload = {
@@ -56,7 +56,7 @@ async function sendNotification(chatId, message) {
             body: JSON.stringify(payload)
         });
         
-        // Запасной вариант на случай ошибки MarkdownV2
+        // Запасной вариант на случай ошибки MarkdownV2 (оставляем, но упрощаем)
         if (!response.ok && response.status === 400) {
             console.warn(`[Chat ${chatId}] Ошибка MarkdownV2, отправляю обычный текст.`);
             const plainPayload = {
@@ -87,14 +87,13 @@ function cleanupBot(chatId) {
 }
 
 
-// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ (Обновлено для JSON) ---
+// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ ---
 
 async function fetchAndParseProxyList() {
     try {
         const { default: fetch } = await import('node-fetch'); 
         console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL (JSON)...');
         
-        // Добавляем заголовки для имитации браузера
         const response = await fetch(PROXY_LIST_URL, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -107,7 +106,6 @@ async function fetchAndParseProxyList() {
             throw new Error(`Ошибка HTTP: ${response.status} ${response.statusText}`);
         }
         
-        // Парсинг JSON
         const jsonList = await response.json();
 
         if (!Array.isArray(jsonList)) {
@@ -115,14 +113,11 @@ async function fetchAndParseProxyList() {
         }
         
         const parsedList = jsonList
-            // Фильтруем, убеждаемся, что есть ip и port
             .filter(item => item.ip && item.port)
-            // Преобразуем в нужный формат { host: 'IP', port: 1080 }
             .map(item => ({
                 host: item.ip.trim(),
                 port: parseInt(item.port)
             }))
-            // Фильтруем некорректные порты
             .filter(proxy => !isNaN(proxy.port));
         
         console.log(`[Proxy Manager] Успешно загружено и обработано ${parsedList.length} прокси.`);
@@ -135,7 +130,7 @@ async function fetchAndParseProxyList() {
 }
 
 
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ ---
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ (ДОБАВЛЕН ФЛАГ isStopping) ---
 
 async function setupMineflayerBot(chatId, host, port, username) {
     const maxAttempts = 5; 
@@ -161,13 +156,15 @@ async function setupMineflayerBot(chatId, host, port, username) {
     }
 
     if (!data) {
-        data = { bot: null, host, port, username, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false };
+        // !!! ДОБАВЛЕН ФЛАГ isStopping !!!
+        data = { bot: null, host, port, username, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false, isStopping: false };
         activeBots[chatId] = data;
     } else {
         data.host = host;
         data.port = port;
         data.username = username;
         data.bot = null;
+        data.isStopping = false; // Сбрасываем при запуске
     }
 
 
@@ -220,7 +217,6 @@ async function setupMineflayerBot(chatId, host, port, username) {
 
         const data = activeBots[chatId];
         if (data) {
-            // Если ошибка связана с прокси/сетью, ставим флаг для ротации
             if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed') || errorMessage.includes('Failed to connect')) {
                  data.isProxyFailure = true; 
             }
@@ -233,10 +229,17 @@ async function setupMineflayerBot(chatId, host, port, username) {
         
         const data = activeBots[chatId];
         if (!data) return cleanupBot(chatId);
+        
+        // !!! ПРОВЕРКА ФЛАГА isStopping !!!
+        if (data.isStopping) {
+            console.log(`[Chat ${chatId}] Остановка по команде пользователя.`);
+            sendNotification(chatId, `⏹ Бот полностью остановлен по команде\\.`, 'MarkdownV2');
+            return cleanupBot(chatId);
+        }
 
         // 1. Специальные причины для немедленного выхода
         if (reason === 'disconnect.quitting' || reason === 'disconnect.cleanup') {
-            sendNotification(chatId, `⏹ Бот остановлен по команде\\.`, 'MarkdownV2');
+            // Если isStopping был установлен через /api/stop, то обработка выше уже сработала
             return cleanupBot(chatId);
         }
 
@@ -251,7 +254,6 @@ async function setupMineflayerBot(chatId, host, port, username) {
 
                 setTimeout(() => {
                     console.log(`[Chat ${chatId}] Попытка переподключения с новым прокси...`);
-                    // Рекурсивный вызов, который возьмет новый индекс прокси
                     setupMineflayerBot(chatId, data.host, data.port, data.username); 
                 }, 5000);
                 return; 
@@ -269,7 +271,6 @@ async function setupMineflayerBot(chatId, host, port, username) {
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
-                // Рекурсивный вызов, сохраняем текущий прокси
                 setupMineflayerBot(chatId, data.host, data.port, data.username); 
             }, 5000 * data.reconnectAttempts); 
         } else {
@@ -285,7 +286,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
 }
 
 
-// --- API ЭНДПОИНТЫ (Обновлены для асинхронного вызова) ---
+// --- API ЭНДПОИНТЫ (Обновлены для isStopping) ---
 
 // /api/start
 app.post('/api/start', async (req, res) => {
@@ -299,8 +300,8 @@ app.post('/api/start', async (req, res) => {
         if (activeBots[chatId]) {
             activeBots[chatId].reconnectAttempts = 0;
             activeBots[chatId].currentProxyIndex = 0; 
+            activeBots[chatId].isStopping = false; // Сбрасываем флаг при новом запуске
         }
-        // !!! Используем await для ожидания загрузки прокси
         await setupMineflayerBot(chatId, host, port, username);
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
@@ -316,6 +317,8 @@ app.post('/api/stop', (req, res) => {
     }
 
     if (activeBots[chatId] && activeBots[chatId].bot) {
+        // !!! Устанавливаем флаг isStopping перед отключением !!!
+        activeBots[chatId].isStopping = true; 
         activeBots[chatId].bot.quit('disconnect.quitting');
         res.status(200).send({ message: "Bot stop command received. Disconnecting." });
     } else {
