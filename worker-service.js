@@ -13,7 +13,7 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 
 // ----------------------------------------------------------------------
-// --- 🔑 КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (С АУТЕНТИФИКАЦИЕЙ) ---
+// --- ✅ НОВЫЙ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (Без аутентификации) ---
 const PROXY_LIST_URL = null; // Отключено
 let PROXY_LIST = [
     { host: '193.233.254.10', port: 1080 },
@@ -43,6 +43,7 @@ async function sendNotification(chatId, message) {
         const { default: fetch } = await import('node-fetch'); 
         if (!TELEGRAM_TOKEN) return console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
         
+        // 🚨 ВАЖНО: Экранирование для MarkdownV2
         const escapedMessage = message.replace(/[().!]/g, '\\$&');
 
         const url = `${BASE_TELEGRAM_URL}/sendMessage`;
@@ -85,11 +86,9 @@ function cleanupBot(chatId) {
 }
 
 
-// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ (теперь не используется, прокси прописаны напрямую) ---
+// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ ---
 async function fetchAndParseProxyList() {
     if (!PROXY_LIST_URL) return PROXY_LIST; 
-    
-    // Этот код остается, если вы захотите вернуться к загрузке с URL
     return []; 
 }
 
@@ -154,10 +153,8 @@ async function setupMineflayerBot(chatId, host, port, username) {
         proxy: {
             host: currentProxy.host,
             port: currentProxy.port,
-            type: 5, 
-            // 🔑 ДОБАВЛЕНЫ УЧЕТНЫЕ ДАННЫЕ ДЛЯ АУТЕНТИФИКАЦИИ SOCKS5
-            username: currentProxy.auth.username,
-            password: currentProxy.auth.password
+            type: 5 
+            // 🛑 ИСПРАВЛЕНО: УДАЛЕНЫ ПОЛЯ username и password
         }
     });
 
@@ -266,7 +263,8 @@ app.post('/api/start', async (req, res) => {
         await setupMineflayerBot(chatId, host, port, username);
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
-        res.status(500).send({ error: e.message });
+        // Убрал лишнее чтение свойств, просто отправляем сообщение об ошибке
+        res.status(500).send({ error: e.message }); 
     }
 });
 
