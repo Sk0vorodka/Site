@@ -1,5 +1,5 @@
 const express = require('express');
-const bodyParser = require('body-parser');
+const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
 
 const app = express();
@@ -13,18 +13,34 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 
 // ----------------------------------------------------------------------
-// --- ⚠️ ФИНАЛЬНАЯ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (Ваш новый адрес) ---
-// В режиме теста мы используем только один адрес.
+// --- 🔑 КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (С АУТЕНТИФИКАЦИЕЙ) ---
 const PROXY_LIST_URL = null; // Отключено
-let PROXY_LIST = [{ host: '67.210.146.50', port: 11080 }]; 
+let PROXY_LIST = [
+    { host: '142.111.48.253', port: 7030, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '31.59.20.176', port: 6754, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '23.95.150.145', port: 6114, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '198.23.239.134', port: 6540, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '107.172.163.27', port: 6543, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '198.105.121.200', port: 6462, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '64.137.96.74', port: 6641, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '84.247.60.125', port: 6095, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '216.10.27.159', port: 6837, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } },
+    { host: '142.111.67.146', port: 5611, auth: { username: 'bowbjpiz', password: 'nnqqnu9c0272' } }
+]; 
 // --- КОНЕЦ КОНФИГУРАЦИИ ПРОКСИ ---
 // ----------------------------------------------------------------------
 
 const activeBots = {}; 
 
+// --- КОНФИГУРАЦИЯ EXPRESS ---
+app.use(bodyParser.json()); 
+
+app.get('/', (req, res) => {
+    res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
+});
+
 // --- ФУНКЦИИ УВЕДОМЛЕНИЙ (С подавлением спама) ---
 async function sendNotification(chatId, message) {
-    // Безопасная проверка: если бот помечен как останавливаемый, не отправляем уведомления!
     const data = activeBots[chatId];
     if (data && data.isStopping) {
         return; 
@@ -32,7 +48,6 @@ async function sendNotification(chatId, message) {
 
     try {
         const { default: fetch } = await import('node-fetch'); 
-
         if (!TELEGRAM_TOKEN) return console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
         
         const escapedMessage = message.replace(/[().!]/g, '\\$&');
@@ -77,46 +92,12 @@ function cleanupBot(chatId) {
 }
 
 
-// --- КОНФИГУРАЦИЯ EXPRESS ---
-app.use(bodyParser.json()); 
-app.get('/', (req, res) => {
-    res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
-});
-
-
-// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ ---
+// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ (теперь не используется, прокси прописаны напрямую) ---
 async function fetchAndParseProxyList() {
-    // В этом коде эта функция будет проигнорирована, так как PROXY_LIST уже содержит адрес.
     if (!PROXY_LIST_URL) return PROXY_LIST; 
     
-    try {
-        const { default: fetch } = await import('node-fetch'); 
-        console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL (JSON)...');
-        // ... (логика загрузки)
-        const response = await fetch(PROXY_LIST_URL, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                'Referer': 'https://www.google.com/', 
-            },
-            redirect: 'follow'
-        });
-        
-        if (!response.ok) throw new Error(`Ошибка HTTP: ${response.status} ${response.statusText}`);
-        
-        const jsonList = await response.json();
-        if (!Array.isArray(jsonList)) throw new Error("Ответ API не является массивом.");
-        
-        const parsedList = jsonList
-            .filter(item => item.ip && item.port)
-            .map(item => ({ host: item.ip.trim(), port: parseInt(item.port) }))
-            .filter(proxy => !isNaN(proxy.port));
-        
-        console.log(`[Proxy Manager] Успешно загружено и обработано ${parsedList.length} прокси.`);
-        return parsedList;
-    } catch (e) {
-        console.error(`[Proxy Manager] ОШИБКА при загрузке прокси-листа: ${e.message}`);
-        return [];
-    }
+    // Этот код остается, если вы захотите вернуться к загрузке с URL
+    return []; 
 }
 
 
@@ -125,13 +106,13 @@ async function fetchAndParseProxyList() {
 async function setupMineflayerBot(chatId, host, port, username) {
     const maxAttempts = 5; 
 
-    // 0. Асинхронная загрузка списка прокси при первой необходимости
+    // 0. Асинхронная загрузка списка прокси при первой необходимости (в данном случае, просто проверка)
     if (PROXY_LIST.length === 0) {
         PROXY_LIST = await fetchAndParseProxyList();
         
         if (PROXY_LIST.length === 0) {
             console.log(`[Chat ${chatId}] Нет доступных прокси. Отключение.`);
-            sendNotification(chatId, `🛑 Не удалось загрузить прокси-лист\\.`, 'MarkdownV2');
+            sendNotification(chatId, `🛑 Не удалось найти прокси-лист\\.`, 'MarkdownV2');
             return cleanupBot(chatId);
         }
     }
@@ -157,7 +138,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
     }
 
 
-    // 2. Проверка ротации (даже если 1 прокси)
+    // 2. Проверка ротации
     const currentIndex = data.currentProxyIndex;
     
     if (currentIndex >= PROXY_LIST.length) {
@@ -180,7 +161,10 @@ async function setupMineflayerBot(chatId, host, port, username) {
         proxy: {
             host: currentProxy.host,
             port: currentProxy.port,
-            type: 5 
+            type: 5, 
+            // 🔑 ДОБАВЛЕНЫ УЧЕТНЫЕ ДАННЫЕ ДЛЯ АУТЕНТИФИКАЦИИ SOCKS5
+            username: currentProxy.auth.username,
+            password: currentProxy.auth.password
         }
     });
 
@@ -204,7 +188,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
 
         const data = activeBots[chatId];
         if (data) {
-            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed') || errorMessage.includes('Failed to connect')) {
+            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed') || errorMessage.includes('Failed to connect') || errorMessage.includes('EACCES')) {
                  data.isProxyFailure = true; 
             }
             data.bot.quit('disconnect.error'); 
@@ -217,7 +201,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
         const data = activeBots[chatId];
         if (!data) return; 
         
-        // 1. ФИНАЛЬНАЯ ПРОВЕРКА ФЛАГА ОСТАНОВКИ
+        // 1. ПРОВЕРКА ФЛАГА ОСТАНОВКИ
         if (data.isStopping) {
             console.log(`[Chat ${chatId}] Остановка по команде пользователя. Подавление уведомлений.`);
             return cleanupBot(chatId);
@@ -274,7 +258,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
 // --- API ЭНДПОИНТЫ ---
 
 app.post('/api/start', async (req, res) => {
-    const { chatId, host, port, username } = req.body;
+    const { chatId, host, port, username } = req.body; 
     
     if (!chatId || !host || !port || !username) {
         return res.status(400).send({ error: "Missing required parameters: chatId, host, port, or username." });
@@ -294,7 +278,7 @@ app.post('/api/start', async (req, res) => {
 });
 
 app.post('/api/stop', (req, res) => {
-    const { chatId } = req.body;
+    const { chatId } = req.body; 
     if (!chatId) {
         return res.status(400).send({ error: "Missing required parameter: chatId." });
     }
