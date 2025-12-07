@@ -13,19 +13,46 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 
 // ----------------------------------------------------------------------
-// --- ⚠️ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА ---
-const PROXY_LIST_URL = 'https://vpn.yzewe.ru/7822370920/2jIrFYKw89rMHoiv3HbvHg'; 
-let PROXY_LIST = []; // Список будет загружен асинхронно
-// --- КОНЕЦ КОНФИГУРАЦИИ ПРОКСИ ---
+// 🚨🚨🚨 СЮДА НУЖНО ВСТАВИТЬ ВАШ СПИСОК ПРОКСИ IP:ПОРТ 🚨🚨🚨
 // ----------------------------------------------------------------------
-
+const RAW_PROXY_LIST_CONTENT = `
+// ВСТАВЬТЕ ВЕСЬ ВАШ СПИСОК IP:ПОРТ ЗДЕСЬ (каждый с новой строки)
+// Например:
+// 203.0.113.45:1080
+// 198.51.100.22:5000
+// ...
+127.0.0.1:10808
+`;
+// ----------------------------------------------------------------------
 const activeBots = {}; // Хранит состояние активных ботов
+
+// --- ФУНКЦИИ ПАРСИНГА ---
+function parseProxyList(rawContent) {
+    if (!rawContent) return [];
+    
+    return rawContent
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && line.includes(':') && !line.startsWith('//')) 
+        .map(line => {
+            const parts = line.split(':');
+            return {
+                host: parts[0],
+                port: parseInt(parts[1])
+            };
+        })
+        .filter(proxy => !isNaN(proxy.port));
+}
+
+// Список прокси загружается синхронно при запуске Worker'а
+const PROXY_LIST = parseProxyList(RAW_PROXY_LIST_CONTENT);
+
 
 // --- КОНФИГУРАЦИЯ EXPRESS ---
 app.use(bodyParser.json());
 
 app.get('/', (req, res) => {
-    res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
+    res.send(`Worker API is running. Loaded ${PROXY_LIST.length} proxies.`);
 });
 
 // --- ФУНКЦИИ УВЕДОМЛЕНИЙ ---
@@ -83,71 +110,17 @@ function cleanupBot(chatId) {
     }
 }
 
-// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ ---
 
-function parseProxyList(rawContent) {
-    if (!rawContent) return [];
-    
-    return rawContent
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0 && line.includes(':'))
-        .map(line => {
-            const parts = line.split(':');
-            return {
-                host: parts[0],
-                port: parseInt(parts[1])
-            };
-        })
-        .filter(proxy => !isNaN(proxy.port));
-}
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ (СИНХРОННО) ---
 
-async function fetchAndParseProxyList() {
-    try {
-        const { default: fetch } = await import('node-fetch'); 
-        console.log('[Proxy Manager] Загрузка списка прокси с внешнего URL...');
-        
-        // --- 🟢 ИСПРАВЛЕНИЕ 403: ДОБАВЛЕНИЕ USER-AGENT И REFERER ---
-        const response = await fetch(PROXY_LIST_URL, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                // Добавляем Referer, чтобы имитировать переход с внешней страницы
-                'Referer': 'https://www.google.com/', 
-            },
-            redirect: 'follow' // Убеждаемся, что идем по редиректам, если они есть
-        });
-        
-        if (!response.ok) {
-            throw new Error(`Ошибка HTTP: ${response.status} ${response.statusText}`);
-        }
-        
-        const rawText = await response.text();
-        const parsedList = parseProxyList(rawText);
-        
-        console.log(`[Proxy Manager] Успешно загружено и обработано ${parsedList.length} прокси.`);
-        return parsedList;
-        
-    } catch (e) {
-        console.error(`[Proxy Manager] ОШИБКА при загрузке прокси-листа: ${e.message}`);
-        return [];
-    }
-}
-
-
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER С РОТАЦИЕЙ ПРОКСИ ---
-
-async function setupMineflayerBot(chatId, host, port, username) {
+function setupMineflayerBot(chatId, host, port, username) {
     const maxAttempts = 5; 
 
-    // 0. Асинхронная загрузка списка прокси при первой необходимости
+    // 0. Проверка списка прокси
     if (PROXY_LIST.length === 0) {
-        PROXY_LIST = await fetchAndParseProxyList();
-        
-        if (PROXY_LIST.length === 0) {
-            console.log(`[Chat ${chatId}] Нет доступных прокси. Отключение.`);
-            sendNotification(chatId, `🛑 Не удалось загрузить прокси-лист с ${PROXY_LIST_URL}. Проверьте URL.`);
-            return cleanupBot(chatId);
-        }
+        console.log(`[Chat ${chatId}] Нет доступных прокси. Отключение.`);
+        sendNotification(chatId, `🛑 Не удалось запустить бот\\. Список прокси пуст или не содержит корректных адресов \\(IP:ПОРТ\\)\\.`, 'MarkdownV2');
+        return cleanupBot(chatId);
     }
 
 
@@ -175,7 +148,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
     
     if (currentIndex >= PROXY_LIST.length) {
         console.log(`[Chat ${chatId}] Все ${PROXY_LIST.length} прокси были испробованы. Отключение.`);
-        sendNotification(chatId, `🛑 Бот отключен окончательно. Все ${PROXY_LIST.length} прокси были испробованы.`);
+        sendNotification(chatId, `🛑 Бот отключен окончательно\\. Все ${PROXY_LIST.length} прокси были испробованы\\.`, 'MarkdownV2');
         cleanupBot(chatId);
         return;
     }
@@ -205,7 +178,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
 
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
-        sendNotification(chatId, `✅ Бот ${username} успешно подключился к ${host}:${port}`);
+        sendNotification(chatId, `✅ Бот ${username} успешно подключился к ${host}:${port}`, 'MarkdownV2');
         
         if (activeBots[chatId]) {
             activeBots[chatId].reconnectAttempts = 0; 
@@ -216,12 +189,11 @@ async function setupMineflayerBot(chatId, host, port, username) {
     bot.on('error', (err) => {
         const errorMessage = err.message || 'Неизвестная ошибка подключения';
         console.error(`[Chat ${chatId}] Ошибка бота: ${errorMessage}`);
-        // Уведомление отправится через 'end'
 
         const data = activeBots[chatId];
         if (data) {
-            // Если ошибка связана с прокси/сетью (ECONNRESET, ETIMEDOUT, socketClosed), ставим флаг для ротации
-            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed')) {
+            // Если ошибка связана с прокси/сетью, ставим флаг для ротации
+            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed') || errorMessage.includes('Failed to connect')) {
                  data.isProxyFailure = true; 
             }
             data.bot.quit('disconnect.error'); 
@@ -236,7 +208,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
 
         // 1. Специальные причины для немедленного выхода
         if (reason === 'disconnect.quitting' || reason === 'disconnect.cleanup') {
-            sendNotification(chatId, `⏹ Бот остановлен по команде.`);
+            sendNotification(chatId, `⏹ Бот остановлен по команде\\.`, 'MarkdownV2');
             return cleanupBot(chatId);
         }
 
@@ -247,7 +219,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
             
             if (data.currentProxyIndex < PROXY_LIST.length) {
                 const nextProxyIndex = data.currentProxyIndex;
-                sendNotification(chatId, `⚠️ Прокси не сработал. Попытка переподключения с ПРОКСИ №${nextProxyIndex + 1}/${PROXY_LIST.length}.`);
+                sendNotification(chatId, `⚠️ Прокси не сработал\\. Попытка переподключения с ПРОКСИ №${nextProxyIndex + 1}/${PROXY_LIST.length}\\.`, 'MarkdownV2');
 
                 setTimeout(() => {
                     console.log(`[Chat ${chatId}] Попытка переподключения с новым прокси...`);
@@ -256,7 +228,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
                 }, 5000);
                 return; 
             } else {
-                sendNotification(chatId, `🛑 Бот отключен окончательно. Все ${PROXY_LIST.length} прокси были испробованы.`);
+                sendNotification(chatId, `🛑 Бот отключен окончательно\\. Все ${PROXY_LIST.length} прокси были испробованы\\.`, 'MarkdownV2');
                 return cleanupBot(chatId);
             }
         }
@@ -265,7 +237,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
         data.reconnectAttempts++;
 
         if (data.reconnectAttempts < maxAttempts) {
-            sendNotification(chatId, `⚠️ Бот был отключен (${reason}). Попытка переподключения (${data.reconnectAttempts}/${maxAttempts})...`);
+            sendNotification(chatId, `⚠️ Бот был отключен \\(${reason}\\)\\. Попытка переподключения \\(${data.reconnectAttempts}/${maxAttempts}\\)\\.\\.\\.`, 'MarkdownV2');
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
@@ -273,22 +245,22 @@ async function setupMineflayerBot(chatId, host, port, username) {
                 setupMineflayerBot(chatId, data.host, data.port, data.username); 
             }, 5000 * data.reconnectAttempts); 
         } else {
-            sendNotification(chatId, `🛑 Бот отключен окончательно (${reason}). Достигнут лимит попыток переподключения.`);
+            sendNotification(chatId, `🛑 Бот отключен окончательно \\(${reason}\\)\\. Достигнут лимит попыток переподключения\\.`, 'MarkdownV2');
             cleanupBot(chatId);
         }
     });
     
     bot.on('spawn', () => {
         console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
-        sendNotification(chatId, `🌍 Бот заспавнился и готов к работе.`);
+        sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`, 'MarkdownV2');
     });
 }
 
 
-// --- API ЭНДПОИНТЫ (Модифицированы для async) ---
+// --- API ЭНДПОИНТЫ ---
 
 // /api/start
-app.post('/api/start', async (req, res) => {
+app.post('/api/start', (req, res) => {
     const { chatId, host, port, username } = req.body;
     
     if (!chatId || !host || !port || !username) {
@@ -300,8 +272,7 @@ app.post('/api/start', async (req, res) => {
             activeBots[chatId].reconnectAttempts = 0;
             activeBots[chatId].currentProxyIndex = 0; 
         }
-        // Запускаем асинхронную функцию
-        await setupMineflayerBot(chatId, host, port, username);
+        setupMineflayerBot(chatId, host, port, username);
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
         res.status(500).send({ error: e.message });
@@ -350,5 +321,5 @@ app.post('/api/command', (req, res) => {
 // --- ЗАПУСК СЕРВЕРА ---
 app.listen(PORT, () => {
     console.log(`Worker service running on port ${PORT}`);
-    // Прокси будут загружены при первом вызове /api/start
+    console.log(`[Proxy Manager] Загружено ${PROXY_LIST.length} прокси.`);
 });
