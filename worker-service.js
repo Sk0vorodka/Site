@@ -77,6 +77,13 @@ function cleanupBot(chatId) {
 }
 
 
+// --- КОНФИГУРАЦИЯ EXPRESS ---
+app.use(bodyParser.json()); 
+app.get('/', (req, res) => {
+    res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
+});
+
+
 // --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ ---
 async function fetchAndParseProxyList() {
     // В этом коде эта функция будет проигнорирована, так как PROXY_LIST уже содержит адрес.
