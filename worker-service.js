@@ -1,7 +1,8 @@
 const express = require('express');
 const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
-const forge = require('mineflayer-forge'); // <-- ИСПРАВЛЕНО: Оставлен только один import!
+// ИСПРАВЛЕНО: Используем актуальный пакет для Forge-поддержки
+const forge = require('mineflayer-forge-support'); 
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -107,7 +108,7 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
     // 1. Инициализация/Обновление состояния
     let data = activeBots[chatId];
     if (data && data.bot) {
-        console.log(`[Chat ${chatId}] Обнаружен старый бот. Отключаю: ${data.host}:${data.port}`);
+        console.log(`[Chat ${chatId}] Обнаружен старый бот. Отключаю: ${data.host}:${data.bot.port}`); // Используем data.bot.port для точности
         data.bot.quit('disconnect.cleanup'); 
         data.bot = null; 
     }
@@ -118,8 +119,8 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
             bot: null, host, port, username, reconnectAttempts: 0, 
             currentProxyIndex: 0, isProxyFailure: false, isStopping: false, 
             afkInterval: null, sendNotifications: true, 
-            version: version,    // <-- НОВОЕ
-            isModded: isModded   // <-- НОВОЕ
+            version: version,    
+            isModded: isModded   
         };
         activeBots[chatId] = data;
     } else {
@@ -130,8 +131,8 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
         data.isStopping = false; 
         if (data.afkInterval) clearInterval(data.afkInterval); // Очищаем старый интервал
         data.afkInterval = null;
-        data.version = version;    // <-- НОВОЕ
-        data.isModded = isModded;  // <-- НОВОЕ
+        data.version = version;    
+        data.isModded = isModded;  
     }
 
 
@@ -148,7 +149,7 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
     
     console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username} | Версия: ${version} | Моды: ${isModded ? 'ДА' : 'НЕТ'} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
 
-    // 💡 ИЗМЕНЕНИЕ: Используем версию, переданную из Telegram
+    // 💡 Используем версию, переданную из Telegram
     const bot = mineflayer.createBot({
         host: host, 
         port: parseInt(port), 
@@ -165,8 +166,9 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
 
     // ❗ ЛОГИКА ДЛЯ МОДОВ
     if (isModded) {
+        // ИСПОЛЬЗУЕМ forge, импортированный из mineflayer-forge-support
         bot.loadPlugin(forge); 
-        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer-Forge.`);
+        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer-Forge-Support.`);
     }
     
 
