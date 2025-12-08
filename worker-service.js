@@ -2,7 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
 // ИСПРАВЛЕНО: Используем mineflayer-protocol-support
-const modSupport = require('mineflayer-protocol-support'); 
+const modSupport = require('mineflayer-mod-support'); 
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -164,12 +164,12 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
         
     });
 
-    // ❗ ЛОГИКА ДЛЯ МОДОВ
-    if (isModded) {
-        // ИСПОЛЬЗУЕМ modSupport
-        bot.loadPlugin(modSupport); 
-        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer Protocol Support.`);
-    }
+   // ❗ ЛОГИКА ДЛЯ МОДОВ
+if (isModded) {
+    // ИСПОЛЬЗУЕМ modSupport (который теперь mineflayer-mod-support)
+    bot.loadPlugin(modSupport); 
+    console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer Mod Support.`);
+}
     
 
     data.bot = bot; 
