@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
+const forge = require('mineflayer-forge');
 // const forge = require('mineflayer-forge'); // <-- Раскомментировать, если вы используете Forge
 
 const app = express();
@@ -160,15 +161,14 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
             port: currentProxy.port,
             type: 5 
         }
+        
     });
 
-    // ❗ ЛОГИКА ДЛЯ МОДОВ (РАСКОММЕНТИРОВАТЬ ПРИ НЕОБХОДИМОСТИ)
-    /*
-    if (isModded) {
-        // const forge = require('mineflayer-forge'); // Если используете Forge, нужно объявить вверху
-        // bot.loadPlugin(forge);
-        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Убедитесь, что плагин Mineflayer для модов загружен.`);
-    }
+    // ❗ ЛОГИКА ДЛЯ МОДОВ
+if (isModded) {
+    bot.loadPlugin(forge); // <-- Раскомментировать
+    console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer-Forge.`);
+}
     */
 
     data.bot = bot; 
