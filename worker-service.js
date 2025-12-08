@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
+// const forge = require('mineflayer-forge'); // <-- Раскомментировать, если вы используете Forge
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -13,7 +14,7 @@ const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 
 // ----------------------------------------------------------------------
-// --- КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (Ваш обновленный список) ---
+// --- ✅ КОНФИГУРАЦИЯ ПРОКСИ-СПИСКА (Ваш обновленный список) ---
 const PROXY_LIST_URL = null; 
 let PROXY_LIST = [
     { host: '203.25.208.163', port: 1100 },
@@ -56,6 +57,7 @@ async function sendNotification(chatId, message, isSystemReconnect = false) {
         const { default: fetch } = await import('node-fetch'); 
         if (!TELEGRAM_TOKEN) return console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
         
+        // Экранируем только символы, специфичные для MarkdownV2
         const escapedMessage = message.replace(/[().!]/g, '\\$&');
 
         const url = `${BASE_TELEGRAM_URL}/sendMessage`;
@@ -98,8 +100,8 @@ function cleanupBot(chatId) {
 
 
 // --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
-
-async function setupMineflayerBot(chatId, host, port, username) {
+// 💡 ИЗМЕНЕНИЕ: Добавлены параметры version и isModded
+async function setupMineflayerBot(chatId, host, port, username, version, isModded) {
     const maxAttempts = 5; 
 
     // 1. Инициализация/Обновление состояния
@@ -115,7 +117,9 @@ async function setupMineflayerBot(chatId, host, port, username) {
         data = { 
             bot: null, host, port, username, reconnectAttempts: 0, 
             currentProxyIndex: 0, isProxyFailure: false, isStopping: false, 
-            afkInterval: null, sendNotifications: true // Значение будет обновлено из API
+            afkInterval: null, sendNotifications: true, 
+            version: version,    // <-- НОВОЕ
+            isModded: isModded   // <-- НОВОЕ
         };
         activeBots[chatId] = data;
     } else {
@@ -126,6 +130,8 @@ async function setupMineflayerBot(chatId, host, port, username) {
         data.isStopping = false; 
         if (data.afkInterval) clearInterval(data.afkInterval); // Очищаем старый интервал
         data.afkInterval = null;
+        data.version = version;    // <-- НОВОЕ
+        data.isModded = isModded;  // <-- НОВОЕ
     }
 
 
@@ -140,13 +146,14 @@ async function setupMineflayerBot(chatId, host, port, username) {
 
     const currentProxy = PROXY_LIST[currentIndex];
     
-    console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
+    console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username} | Версия: ${version} | Моды: ${isModded ? 'ДА' : 'НЕТ'} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
 
+    // 💡 ИЗМЕНЕНИЕ: Используем версию, переданную из Telegram
     const bot = mineflayer.createBot({
         host: host, 
         port: parseInt(port), 
         username: username,
-        version: '1.20.1', 
+        version: version, 
         
         proxy: {
             host: currentProxy.host,
@@ -154,6 +161,15 @@ async function setupMineflayerBot(chatId, host, port, username) {
             type: 5 
         }
     });
+
+    // ❗ ЛОГИКА ДЛЯ МОДОВ (РАСКОММЕНТИРОВАТЬ ПРИ НЕОБХОДИМОСТИ)
+    /*
+    if (isModded) {
+        // const forge = require('mineflayer-forge'); // Если используете Forge, нужно объявить вверху
+        // bot.loadPlugin(forge);
+        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Убедитесь, что плагин Mineflayer для модов загружен.`);
+    }
+    */
 
     data.bot = bot; 
     
@@ -217,7 +233,8 @@ async function setupMineflayerBot(chatId, host, port, username) {
                 sendNotification(chatId, notificationMessage, true); // Системное уведомление
                 setTimeout(() => {
                     console.log(`[Chat ${chatId}] Попытка переподключения с новым прокси...`);
-                    setupMineflayerBot(chatId, data.host, data.port, data.username); 
+                    // Передаем текущие версию и статус модов
+                    setupMineflayerBot(chatId, data.host, data.port, data.username, data.version, data.isModded); 
                 }, 5000);
                 return; 
             } else {
@@ -237,7 +254,8 @@ async function setupMineflayerBot(chatId, host, port, username) {
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
-                setupMineflayerBot(chatId, data.host, data.port, data.username); 
+                // Передаем текущие версию и статус модов
+                setupMineflayerBot(chatId, data.host, data.port, data.username, data.version, data.isModded); 
             }, 5000 * data.reconnectAttempts); 
         } else {
             notificationMessage = `🛑 Бот отключен окончательно \\(Причина: ${reason}\\)\\. Достигнут лимит попыток переподключения\\.`;
@@ -250,7 +268,7 @@ async function setupMineflayerBot(chatId, host, port, username) {
         console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
         sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`, false);
         
-        // --- ANTI-AFK ЛОГИКА (Пункт 3А) ---
+        // --- ANTI-AFK ЛОГИКА ---
         // 20 минут = 1200000 мс
         const AFK_INTERVAL = 1200000; 
         
@@ -271,7 +289,6 @@ async function setupMineflayerBot(chatId, host, port, username) {
         // --- КОНЕЦ ANTI-AFK ЛОГИКИ ---
     });
 }
-
 
 // --- API ЭНДПОИНТЫ ---
 
@@ -303,65 +320,6 @@ app.post('/api/start', async (req, res) => {
     }
 });
 
-// ИЗМЕНЕНИЕ: Обновляем сигнатуру setupMineflayerBot
-async function setupMineflayerBot(chatId, host, port, username, version, isModded) {
-    // ... ваш код инициализации ...
-
-    // ... в начале функции, где инициализируется data ...
-    if (!data) {
-        data = { 
-            bot: null, host, port, username, reconnectAttempts: 0, 
-            currentProxyIndex: 0, isProxyFailure: false, isStopping: false, 
-            afkInterval: null, sendNotifications: true, 
-            version: version, // <-- ДОБАВЛЕНО
-            isModded: isModded // <-- ДОБАВЛЕНО
-        };
-        activeBots[chatId] = data;
-    } else {
-        // ...
-        data.version = version; // <-- ДОБАВЛЕНО
-        data.isModded = isModded; // <-- ДОБАВЛЕНО
-        // ...
-    }
-
-    // ...
-    
-    // ИЗМЕНЕНИЕ: Меняем Mineflayer.createBot()
-    const bot = mineflayer.createBot({
-        host: host, 
-        port: parseInt(port), 
-        username: username,
-        version: version, // <--- ИСПОЛЬЗУЕМ ВЕРСИЮ ИЗ TG
-        
-        // 💡 УСЛОВИЕ ДЛЯ МОДОВ
-        // Если вы используете плагин, он должен быть инициализирован здесь
-        // Пример (НЕ ИСПОЛЬЗУЕТСЯ, но для справки):
-        // (isModded && version.startsWith('1.12')) ? '1.12.2-forge' : version
-        
-        proxy: {
-            host: currentProxy.host,
-            port: currentProxy.port,
-            type: 5 
-        }
-    });
-    
-    // 💡 Инициализация плагина для модов, если isModded == true
-    // ЭТО ТРЕБУЕТ УСТАНОВКИ ДОПОЛНИТЕЛЬНОГО ПЛАГИНА (например, mineflayer-forge)
-    // Если вы установите плагин, добавьте здесь:
-    /*
-    if (isModded) {
-        const forge = require('mineflayer-forge');
-        bot.loadPlugin(forge);
-    }
-    */
-    
-    data.bot = bot; 
-    // ... остальной код ...
-}
-});
-
-// ... остальные API-эндпоинты (/api/stop, /api/command) остаются без изменений ...
-
 app.post('/api/stop', (req, res) => {
     const { chatId } = req.body; 
     if (!chatId) {
@@ -377,7 +335,6 @@ app.post('/api/stop', (req, res) => {
         cleanupBot(chatId); 
     }
 });
-
 
 app.post('/api/command', (req, res) => {
     const { chatId, command } = req.body;
@@ -399,8 +356,6 @@ app.post('/api/command', (req, res) => {
     }
 });
 
-
-// --- ЗАПУСК СЕРВЕРА ---
 app.listen(PORT, () => {
     console.log(`Worker service running on port ${PORT}`);
 });
