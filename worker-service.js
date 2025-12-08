@@ -1,8 +1,8 @@
 const express = require('express');
 const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
-// ИСПРАВЛЕНО: Используем актуальный пакет для Forge-поддержки
-const forge = require('mineflayer-forge-support'); 
+// ИСПРАВЛЕНО: Используем mineflayer-protocol-support
+const modSupport = require('mineflayer-protocol-support'); 
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -166,9 +166,9 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
 
     // ❗ ЛОГИКА ДЛЯ МОДОВ
     if (isModded) {
-        // ИСПОЛЬЗУЕМ forge, импортированный из mineflayer-forge-support
-        bot.loadPlugin(forge); 
-        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer-Forge-Support.`);
+        // ИСПОЛЬЗУЕМ modSupport
+        bot.loadPlugin(modSupport); 
+        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer Protocol Support.`);
     }
     
 
