@@ -9,6 +9,8 @@
     "express": "^4.19.2",
     "mineflayer": "^4.20.0",
     "node-fetch": "^3.3.2",
-    "socks-client": "^1.0.1"
+    "socks-client": "^1.0.1",
+    "mineflayer-forge": "^1.0.1"
   }
 }
+
