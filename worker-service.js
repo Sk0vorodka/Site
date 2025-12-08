@@ -276,16 +276,18 @@ async function setupMineflayerBot(chatId, host, port, username) {
 // --- API ЭНДПОИНТЫ ---
 
 app.post('/api/start', async (req, res) => {
-    const { chatId, host, port, username, sendNotifications } = req.body; // Получаем новый флаг
+    // 💡 ИЗМЕНЕНИЕ: Получаем новые параметры version и isModded
+    const { chatId, host, port, username, sendNotifications, version, isModded } = req.body; 
     
-    if (!chatId || !host || !port || !username) {
-        return res.status(400).send({ error: "Missing required parameters: chatId, host, port, or username." });
+    if (!chatId || !host || !port || !username || !version) {
+        return res.status(400).send({ error: "Missing required parameters: chatId, host, port, username, or version." });
     }
     
     try {
         if (!activeBots[chatId]) {
              activeBots[chatId] = {}; 
         }
+        
         // Сохраняем или обновляем статус уведомлений
         activeBots[chatId].sendNotifications = sendNotifications !== undefined ? sendNotifications : true; 
 
@@ -293,11 +295,69 @@ app.post('/api/start', async (req, res) => {
         activeBots[chatId].currentProxyIndex = 0; 
         activeBots[chatId].isStopping = false; 
 
-        await setupMineflayerBot(chatId, host, port, username);
+        // 💡 ИЗМЕНЕНИЕ: Передаем версию и статус модов в Mineflayer
+        await setupMineflayerBot(chatId, host, port, username, version, isModded);
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
         res.status(500).send({ error: e.message });
     }
+});
+
+// ИЗМЕНЕНИЕ: Обновляем сигнатуру setupMineflayerBot
+async function setupMineflayerBot(chatId, host, port, username, version, isModded) {
+    // ... ваш код инициализации ...
+
+    // ... в начале функции, где инициализируется data ...
+    if (!data) {
+        data = { 
+            bot: null, host, port, username, reconnectAttempts: 0, 
+            currentProxyIndex: 0, isProxyFailure: false, isStopping: false, 
+            afkInterval: null, sendNotifications: true, 
+            version: version, // <-- ДОБАВЛЕНО
+            isModded: isModded // <-- ДОБАВЛЕНО
+        };
+        activeBots[chatId] = data;
+    } else {
+        // ...
+        data.version = version; // <-- ДОБАВЛЕНО
+        data.isModded = isModded; // <-- ДОБАВЛЕНО
+        // ...
+    }
+
+    // ...
+    
+    // ИЗМЕНЕНИЕ: Меняем Mineflayer.createBot()
+    const bot = mineflayer.createBot({
+        host: host, 
+        port: parseInt(port), 
+        username: username,
+        version: version, // <--- ИСПОЛЬЗУЕМ ВЕРСИЮ ИЗ TG
+        
+        // 💡 УСЛОВИЕ ДЛЯ МОДОВ
+        // Если вы используете плагин, он должен быть инициализирован здесь
+        // Пример (НЕ ИСПОЛЬЗУЕТСЯ, но для справки):
+        // (isModded && version.startsWith('1.12')) ? '1.12.2-forge' : version
+        
+        proxy: {
+            host: currentProxy.host,
+            port: currentProxy.port,
+            type: 5 
+        }
+    });
+    
+    // 💡 Инициализация плагина для модов, если isModded == true
+    // ЭТО ТРЕБУЕТ УСТАНОВКИ ДОПОЛНИТЕЛЬНОГО ПЛАГИНА (например, mineflayer-forge)
+    // Если вы установите плагин, добавьте здесь:
+    /*
+    if (isModded) {
+        const forge = require('mineflayer-forge');
+        bot.loadPlugin(forge);
+    }
+    */
+    
+    data.bot = bot; 
+    // ... остальной код ...
+}
 });
 
 // ... остальные API-эндпоинты (/api/stop, /api/command) остаются без изменений ...
