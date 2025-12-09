@@ -1,8 +1,8 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
-// ✅ ИСПРАВЛЕНО: Используем актуальный пакет для поддержки модов
-const modSupport = require('mineflayer-mod-support'); 
+// ✅ ИСПРАВЛЕНО: Используем mineflayer-legacy-support для поддержки протоколов
+const modSupport = require('mineflayer-legacy-support'); 
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -145,7 +145,7 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
     const currentIndex = data.currentProxyIndex;
     if (currentIndex >= PROXY_LIST.length) {
         console.log(`[Chat ${chatId}] Все ${PROXY_LIST.length} прокси были испробованы. Отключение.`);
-        sendNotification(chatId, `🛑 Бот отключен окончательно\\. Все ${PROXY_LIST.length} прокси были испробованы\\.`, true); // 👈 true
+        sendNotification(chatId, `🛑 Бот отключен окончательно\\. Все ${PROXY_LIST.length} прокси были испробованы\\.`, true); 
         cleanupBot(chatId);
         return;
     }
@@ -171,9 +171,9 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
 
     // ❗ ЛОГИКА ДЛЯ МОДОВ
     if (isModded) {
-        // ИСПОЛЬЗУЕМ modSupport
+        // ИСПОЛЬЗУЕМ modSupport (mineflayer-legacy-support)
         bot.loadPlugin(modSupport); 
-        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer Mod Support.`);
+        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer Legacy Support.`);
     }
     
 
@@ -183,7 +183,7 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
 
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
-        // ✅ ИСПРАВЛЕНИЕ: Это системное уведомление - передаем true
+        // ✅ Это системное уведомление - передаем true
         sendNotification(chatId, `✅ Бот ${username} успешно подключился к ${host}:${port}`, true); 
         
         if (activeBots[chatId]) {
@@ -237,7 +237,7 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
             if (data.currentProxyIndex < PROXY_LIST.length) {
                 const nextProxyIndex = data.currentProxyIndex;
                 notificationMessage = `⚠️ Прокси не сработал\\. Попытка переподключения с ПРОКСИ №${nextProxyIndex + 1}/${PROXY_LIST.length}\\.`;
-                sendNotification(chatId, notificationMessage, true); // 👈 Используем true
+                sendNotification(chatId, notificationMessage, true); // 👈 true
                 setTimeout(() => {
                     console.log(`[Chat ${chatId}] Попытка переподключения с новым прокси...`);
                     // Передаем текущие версию и статус модов
@@ -246,7 +246,7 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
                 return; 
             } else {
                 notificationMessage = `🛑 Бот отключен окончательно\\. Все ${PROXY_LIST.length} прокси были испробованы\\.`;
-                sendNotification(chatId, notificationMessage, true); // 👈 Используем true
+                sendNotification(chatId, notificationMessage, true); // 👈 true
                 return cleanupBot(chatId);
             }
         } 
@@ -257,7 +257,7 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
         if (data.reconnectAttempts < maxAttempts) {
             // Отправляем причину, полученную от сервера, в Telegram
             notificationMessage = `⚠️ Бот был отключен \\(Причина: ${reason}\\)\\. Попытка переподключения \\(${data.reconnectAttempts}/${maxAttempts}\\)\\.\\.\\.`;
-            sendNotification(chatId, notificationMessage, true); // 👈 Используем true
+            sendNotification(chatId, notificationMessage, true); // 👈 true
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
@@ -266,14 +266,14 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
             }, 5000 * data.reconnectAttempts); 
         } else {
             notificationMessage = `🛑 Бот отключен окончательно \\(Причина: ${reason}\\)\\. Достигнут лимит попыток переподключения\\.`;
-            sendNotification(chatId, notificationMessage, true); // 👈 Используем true
+            sendNotification(chatId, notificationMessage, true); // 👈 true
             cleanupBot(chatId);
         }
     });
     
     bot.on('spawn', () => {
         console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
-        // ✅ ИСПРАВЛЕНИЕ: Это системное уведомление - передаем true
+        // ✅ Это системное уведомление - передаем true
         sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`, true); 
         
         // --- ANTI-AFK ЛОГИКА ---
