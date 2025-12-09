@@ -1,8 +1,9 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
-// ✅ ИСПРАВЛЕНО: Используем mineflayer-legacy-support для поддержки протоколов
+// Используем mineflayer-modding-support (или последнюю рабочую зависимость)
 const modSupport = require('mineflayer-modding-support'); 
+const net = require("net"); // ✅ Добавлено для PING
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -44,7 +45,148 @@ app.get('/', (req, res) => {
     res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
 });
 
+// ======================================================================
+// --- ⚡️ SERVER PING UTILITY (Ваш код, обернутый в Promise) ---
+// ======================================================================
+
+function makeBuf(server, port) {
+    // 0x00 (Packet ID) + VarInt(Protocol Version - 0) + VarInt(String Length) + String(Host) + UShort(Port) + VarInt(Next State - 1)
+    const hostBuffer = Buffer.from(server, 'utf8');
+    const bufSize = 7 + hostBuffer.length;
+    
+    // Создаем буфер для Handshake: [Длина пакета] [0x00] [0x00] [0x05] [Длина хоста] [Хост] [Порт] [0x01]
+    const buffer = Buffer.alloc(bufSize); 
+
+    // Protocol version (VarInt, 0x00)
+    buffer.writeUInt8(bufSize - 1, 0);
+    buffer.writeUInt8(0, 1);
+    buffer.writeUInt8(5, 2); // VarInt 5 (для совместимости)
+    
+    // Hostname
+    buffer.writeUInt8(hostBuffer.length, 3);
+    hostBuffer.copy(buffer, 4);
+    
+    // Port
+    buffer.writeUInt16BE(parseInt(port), hostBuffer.length + 4);
+    
+    // Next state (VarInt, 1 - Status)
+    buffer.writeUInt8(1, hostBuffer.length + 6);
+
+    return buffer;
+}
+
+const ping = function (server, port, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+        const MC_DEFAULT_PORT = 25565;
+        if (typeof port !== "number") {
+            port = MC_DEFAULT_PORT;
+        }
+
+        let response = "";
+        let receivedHeader = false;
+        
+        const socket = net.connect({
+            port: port,
+            host: server
+        }, () => {
+            try {
+                // 1. Handshake (Ваша makeBuf)
+                socket.write(makeBuf(server, port));
+                // 2. Status Request (0x01, 0x00)
+                socket.write(Buffer.from("0100", "hex"));
+            } catch (e) {
+                socket.end();
+                return reject(new Error(`Ping error during write: ${e.message}`));
+            }
+        });
+
+        socket.setTimeout(timeout, () => {
+            socket.end();
+            reject(new Error(`Socket timed out when connecting to ${server}:${port}`));
+        });
+        
+        socket.on("data", function (data) {
+            // Первая часть - заголовок пакета (обычно 5 байт), вторая - сам JSON.
+            if (!receivedHeader) {
+                // Пытаемся пропустить заголовок (4-5 байт)
+                response += data.toString('utf8', 5);
+                receivedHeader = true;
+            } else {
+                response += data.toString('utf8');
+            }
+
+            try {
+                // Пытаемся найти начало JSON и распарсить
+                const startIndex = response.indexOf('{');
+                if (startIndex !== -1) {
+                    const jsonString = response.substring(startIndex);
+                    const result = JSON.parse(jsonString); 
+                    socket.end();
+                    resolve(jsonString);
+                }
+            } catch (e) {
+                // JSON неполный, ждем еще данных
+            }
+        });
+
+        socket.once('error', (e) => {
+            socket.end();
+            reject(e);
+        });
+        
+        socket.on('end', () => {
+             // Если сокет закрылся, а мы не получили полный JSON (не вызвали resolve)
+            if (!response.includes('{')) {
+                 reject(new Error("Connection ended abruptly or received malformed status response."));
+            }
+        });
+    });
+};
+
+app.post('/api/ping', async (req, res) => {
+    const { host, port } = req.body;
+    
+    if (!host || !port) {
+        return res.status(400).send({ error: "Missing required parameters: host or port." });
+    }
+    
+    try {
+        const jsonString = await ping(host, parseInt(port));
+        const data = JSON.parse(jsonString);
+        
+        // Извлекаем ключевую информацию
+        const modInfo = data.modinfo;
+        const version = data.version ? data.version.name : null;
+        const description = data.description ? (typeof data.description === 'string' ? data.description : data.description.text) : 'No description';
+
+        const result = {
+            online: true,
+            version: version,
+            description: description,
+            // Определяем, является ли сервер моддированным
+            isModded: !!(modInfo && modInfo.modList && modInfo.modList.length > 0),
+            mods: modInfo ? modInfo.modList : [],
+            rawData: data
+        };
+
+        res.status(200).send(result);
+
+    } catch (e) {
+        res.status(200).send({ 
+            online: false, 
+            error: `Failed to ping server: ${e.message}`,
+            message: e.message
+        });
+    }
+});
+
+
+// ======================================================================
 // --- ФУНКЦИИ УВЕДОМЛЕНИЙ (С учетом флага sendNotifications) ---
+// ... (Ваш код sendNotification, cleanupBot, setupMineflayerBot остается здесь) ...
+// (Он слишком большой, чтобы повторять его полностью, но он должен быть в файле!)
+// ======================================================================
+
 async function sendNotification(chatId, message, isSystemNotification = false) {
     const data = activeBots[chatId];
     
@@ -171,9 +313,9 @@ async function setupMineflayerBot(chatId, host, port, username, version, isModde
 
     // ❗ ЛОГИКА ДЛЯ МОДОВ
     if (isModded) {
-        // ИСПОЛЬЗУЕМ modSupport (mineflayer-legacy-support)
+        // ИСПОЛЬЗУЕМ modSupport
         bot.loadPlugin(modSupport); 
-        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer Legacy Support.`);
+        console.log(`[Chat ${chatId}] Режим модов ВКЛЮЧЕН. Загружен Mineflayer Modding Support.`);
     }
     
 
