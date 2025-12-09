@@ -2,7 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const mineflayer = require('mineflayer');
 // ✅ ИСПРАВЛЕНО: Используем mineflayer-legacy-support для поддержки протоколов
-const modSupport = require('mineflayer-legacy-support'); 
+const modSupport = require('mineflayer-modding-support'); 
 
 const app = express();
 const PORT = process.env.PORT || 10000;
