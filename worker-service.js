@@ -42,50 +42,6 @@ app.get('/', (req, res) => {
     res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
 });
 
-// ----------------------------------------------------------------------
-// --- KICKSTAND (ANTI-AFK) ЛОГИКА ---
-// ----------------------------------------------------------------------
-function startKickstand(bot) {
-    // Интервал 15 секунд (15000 миллисекунд)
-    const interval = 15000; 
-    
-    // Очищаем старый интервал, если он есть
-    if (bot.kickstandInterval) {
-        clearInterval(bot.kickstandInterval);
-    }
-    
-    let kickstandInterval = setInterval(() => {
-        if (bot.entity) {
-            // Самое незаметное действие: небольшой поворот головы
-            const randomYaw = Math.random() * Math.PI * 2;
-            const randomPitch = (Math.random() - 0.5) * Math.PI / 8; // Небольшой наклон
-            bot.look(randomYaw, randomPitch, true); // true = мгновенный поворот
-            
-            // Если нужно иногда прыгать, можно добавить:
-            // if (Math.random() < 0.05) { // 5% шанс прыгнуть
-            //     bot.setControlState('jump', true);
-            //     setTimeout(() => bot.setControlState('jump', false), 50);
-            // }
-        }
-    }, interval);
-
-    // Сохраняем интервал для последующей остановки
-    bot.kickstandInterval = kickstandInterval;
-    console.log(`[Chat ${bot.chatId}] Kickstand запущен.`);
-}
-
-function stopKickstand(bot) {
-    if (bot && bot.kickstandInterval) {
-        clearInterval(bot.kickstandInterval);
-        delete bot.kickstandInterval;
-        console.log(`[Chat ${bot.chatId}] Kickstand остановлен.`);
-    }
-}
-// ----------------------------------------------------------------------
-// --- КОНЕЦ KICKSTAND ЛОГИКИ ---
-// ----------------------------------------------------------------------
-
-
 // --- ФУНКЦИИ УВЕДОМЛЕНИЙ (Оставлены без изменений) ---
 async function sendNotification(chatId, message) {
     // ... (код sendNotification)
@@ -129,10 +85,6 @@ async function sendNotification(chatId, message) {
 
 function cleanupBot(chatId) {
     if (activeBots[chatId]) {
-        // Дополнительная очистка Kickstand при окончательной очистке ресурсов
-        if (activeBots[chatId].bot) {
-            stopKickstand(activeBots[chatId].bot);
-        }
         console.log(`[Chat ${chatId}] Ресурсы бота очищены.`);
         delete activeBots[chatId];
     }
@@ -144,7 +96,7 @@ async function fetchAndParseProxyList() {
     return []; 
 }
 
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER (С изменениями) ---
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER (Оставлены без изменений) ---
 async function setupMineflayerBot(chatId, host, port, username, version) {
     const maxAttempts = 5; 
 
@@ -203,7 +155,6 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
     });
 
     data.bot = bot; 
-    bot.chatId = chatId; // Добавляем chatId для использования в Kickstand
     
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
@@ -221,9 +172,6 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
 
         const data = activeBots[chatId];
         if (data) {
-            // Остановка Kickstand перед отключением
-            stopKickstand(data.bot); 
-            
             if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed') || errorMessage.includes('Failed to connect') || errorMessage.includes('EACCES')) {
                  data.isProxyFailure = true; 
             }
@@ -232,14 +180,9 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
     });
 
     bot.on('end', (reason) => {
-        // Остановка Kickstand перед отключением
-        const data = activeBots[chatId];
-        if (data) {
-            stopKickstand(data.bot); 
-        }
-        
         console.log(`[Chat ${chatId}] Бот отключен. Причина: ${reason}`);
         
+        const data = activeBots[chatId];
         if (!data) return; 
         
         if (data.isStopping) {
@@ -287,10 +230,6 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
     bot.on('spawn', () => {
         console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
         sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`, 'MarkdownV2');
-        
-        // --- ЗАПУСК АВТОНОМНОГО KICKSTAND ---
-        startKickstand(bot); 
-        // --- КОНЕЦ АВТОНОМНОГО KICKSTAND ---
     });
 }
 
