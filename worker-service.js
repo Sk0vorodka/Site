@@ -1,304 +1,570 @@
-const express = require('express');
-const bodyParser = require('body-parser'); 
-const mineflayer = require('mineflayer');
+import os
+import json
+import logging
+import requests
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters 
+    # JobQueue УДАЛЕН
+)
 
-const app = express();
-const PORT = process.env.PORT || 10000;
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-// ======================================================================
-// --- КОНФИГУРАЦИЯ БОТА И API ---
-const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE'; 
-const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-// ======================================================================
+# ======================================================================
+# --- ⚠️ КОНФИГУРАЦИЯ ---
+TELEGRAM_TOKEN = "8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE" 
+WORKER_API_URL = "https://site-3-8fj7.onrender.com" 
+# ======================================================================
 
 
-// ----------------------------------------------------------------------
-// --- КОНФИГУРАЦИЯ ПРОКСИ ---
-const PROXY_LIST_URL = null; // Отключено
-let PROXY_LIST = [
-    { host: '203.25.208.163', port: 1100 },
-    { host: '13.231.213.224', port: 1080 },
-    { host: '47.82.117.31', port: 1100 },
-    { host: '203.25.208.163', port: 1111 },
-    { host: '46.146.220.180', port: 1080 },
-    { host: '109.168.173.173', port: 1080 },
-    { host: '78.140.46.48', port: 1080 },
-    { host: '47.82.117.31', port: 1011 },
-    { host: '89.148.196.156', port: 1080 },
-    { host: '37.192.133.82', port: 1080 },
-    { host: '121.169.46.116', port: 1090 },
-    { host: '192.241.156.17', port: 1080 },
-    { host: '38.183.144.18', port: 1080 },
-    { host: '143.110.217.153', port: 1080 }
-]; 
-// ----------------------------------------------------------------------
+# Проверка конфигурации
+if not all([TELEGRAM_TOKEN, WORKER_API_URL]):
+    logger.error("ОШИБКА: Не заданы все необходимые переменные конфигурации.")
+    exit(1)
 
-const activeBots = {}; 
 
-// --- КОНФИГУРАЦИЯ EXPRESS ---
-app.use(bodyParser.json()); 
+# --- Глобальное состояние ---
+USER_DATA = {}
+DATA_FILE = "data.json"
+tg_app = None 
 
-app.get('/', (req, res) => {
-    res.send(`Worker API is running. Currently loaded ${PROXY_LIST.length} proxies.`);
-});
 
-// --- ФУНКЦИИ УВЕДОМЛЕНИЙ (Оставлены без изменений) ---
-async function sendNotification(chatId, message) {
-    // ... (код sendNotification)
-    const data = activeBots[chatId];
-    if (data && data.isStopping) {
-        return; 
-    }
+# ----------------------------------------------------------------------
+#                         ФУНКЦИИ УПРАВЛЕНИЯ ДАННЫМИ
+# ----------------------------------------------------------------------
 
-    try {
-        const { default: fetch } = await import('node-fetch'); 
-        if (!TELEGRAM_TOKEN) return console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
-        
-        const escapedMessage = message.replace(/[().!]/g, '\\$&');
+def load_data():
+    """Загружает данные пользователей из файла."""
+    global USER_DATA
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                USER_DATA = json.load(f)
+            logger.info("Настройки ботов успешно загружены.")
+        else:
+            logger.info("Файл настроек не найден. Начинаем с чистого листа.")
+            USER_DATA = {}
+    except json.JSONDecodeError:
+        logger.warning("Ошибка декодирования JSON. Начинаем с чистого листа.")
+        USER_DATA = {}
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке настроек: {e}")
+        USER_DATA = {}
 
-        const url = `${BASE_TELEGRAM_URL}/sendMessage`;
-        const payload = {
-            chat_id: chatId,
-            text: escapedMessage,
-            parse_mode: 'MarkdownV2'
-        };
+def save_data():
+    """Сохраняет данные пользователей в файл."""
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(USER_DATA, f, ensure_ascii=False, indent=4)
+        logger.info("Настройки ботов успешно сохранены.")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении настроек: {e}")
 
-        let response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        if (!response.ok && response.status === 400) {
-            console.warn(`[Chat ${chatId}] Ошибка MarkdownV2, отправляю обычный текст.`);
-            const plainPayload = { chat_id: chatId, text: `[RAW] ${message}` };
-            response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(plainPayload)
-            });
+def get_user_data(chat_id):
+    """Возвращает или инициализирует данные пользователя."""
+    chat_id_str = str(chat_id)
+    if chat_id_str not in USER_DATA:
+        USER_DATA[chat_id_str] = {
+            "host": None,
+            "port": None,
+            "username": f"Bot{chat_id_str[-4:]}",
+            "awaiting_username": False,
+            "awaiting_command": False,
+            "send_notifications": True,
+            "is_running": False,
+            "version": "1.20.1", 
         }
-    } catch (e) {
-        console.error(`[Chat ${chatId}] Критическая ошибка сети при отправке уведомления: ${e.message}`);
-    }
-}
-
-function cleanupBot(chatId) {
-    if (activeBots[chatId]) {
-        console.log(`[Chat ${chatId}] Ресурсы бота очищены.`);
-        delete activeBots[chatId];
-    }
-}
-
-// --- ФУНКЦИИ ПАРСИНГА И ЗАГРУЗКИ ПРОКСИ (Оставлены без изменений) ---
-async function fetchAndParseProxyList() {
-    if (!PROXY_LIST_URL) return PROXY_LIST; 
-    return []; 
-}
-
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER (Оставлены без изменений) ---
-async function setupMineflayerBot(chatId, host, port, username, version) {
-    const maxAttempts = 5; 
-
-    if (PROXY_LIST.length === 0) {
-        PROXY_LIST = await fetchAndParseProxyList();
-        if (PROXY_LIST.length === 0) {
-            console.log(`[Chat ${chatId}] Нет доступных прокси. Отключение.`);
-            sendNotification(chatId, `🛑 Не удалось найти прокси-лист\\.`, 'MarkdownV2');
-            return cleanupBot(chatId);
-        }
-    }
-
-    let data = activeBots[chatId];
-    if (data && data.bot) {
-        console.log(`[Chat ${chatId}] Обнаружен старый бот. Отключаю: ${data.host}:${data.port}`);
-        data.bot.quit('disconnect.cleanup'); 
-        data.bot = null; 
-    }
-
-    if (!data) {
-        data = { bot: null, host, port, username, version, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false, isStopping: false };
-        activeBots[chatId] = data;
-    } else {
-        data.host = host;
-        data.port = port;
-        data.username = username;
-        data.version = version; // Добавлено сохранение версии
-        data.bot = null;
-        data.isStopping = false; 
-    }
-
-    const currentIndex = data.currentProxyIndex;
+        save_data()
     
-    if (currentIndex >= PROXY_LIST.length) {
-        console.log(`[Chat ${chatId}] Все ${PROXY_LIST.length} прокси были испробованы. Отключение.`);
-        sendNotification(chatId, `🛑 Бот отключен окончательно\\. Все ${PROXY_LIST.length} прокси были испробованы\\.`, 'MarkdownV2');
-        cleanupBot(chatId);
-        return;
+    # Защита: Добавляем недостающие поля
+    if "version" not in USER_DATA[chat_id_str]:
+        USER_DATA[chat_id_str]["version"] = "1.20.1"
+        save_data()
+        
+    if "awaiting_command" not in USER_DATA[chat_id_str]:
+        USER_DATA[chat_id_str]["awaiting_command"] = False
+        
+    if "send_notifications" not in USER_DATA[chat_id_str]:
+        USER_DATA[chat_id_str]["send_notifications"] = True
+        
+    return USER_DATA[chat_id_str]
+
+# ----------------------------------------------------------------------
+#                           ИНЛАЙН-КЛАВИАТУРА И ФОРМАТИРОВАНИЕ
+# ----------------------------------------------------------------------
+
+def escape_markdown(text):
+    """Экранирует символы Markdown V2."""
+    if not text:
+        return ''
+    # Экранируем символы: _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
+    chars_to_escape = r'_*[]()~`>#+-=|{}.!'
+    return "".join(['\\' + char if char in chars_to_escape else char for char in str(text)])
+
+
+def get_main_menu_keyboard(username, notifications_enabled, is_running):
+    """
+    Формирует главное меню с контекстно-зависимой кнопкой запуска/остановки.
+    """
+    notif_text = '🔕 Выключить уведомления' if notifications_enabled else '🔔 Включить уведомления'
+    
+    if is_running:
+        status_button = InlineKeyboardButton("⏹ Остановить бота", callback_data="stop_bot")
+    else:
+        status_button = InlineKeyboardButton("▶️ Запустить бота", callback_data="start_bot")
+    
+    keyboard = [
+        [
+            status_button 
+        ],
+        [
+            InlineKeyboardButton("⚙️ Сменить сервер (домен:порт)", callback_data="set_server_prompt"),
+            InlineKeyboardButton("✨ Сменить версию", callback_data="set_version_prompt")
+        ],
+        [
+            InlineKeyboardButton("👤 Сменить имя бота", callback_data="set_username_prompt")
+        ],
+        [
+            InlineKeyboardButton(notif_text, callback_data="toggle_notifications")
+        ],
+        [
+            InlineKeyboardButton("💬 Отправить команду", callback_data="send_command_prompt"), 
+            InlineKeyboardButton("♻️ Обновить статус", callback_data="refresh_status")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# ----------------------------------------------------------------------
+#               KICKSTAND JOB QUEUE УДАЛЕНА ИЗ MAIN.PY
+# ----------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------
+#                           ВЗАИМОДЕЙСТВИЕ С WORKER'ОМ
+# ----------------------------------------------------------------------
+
+async def get_worker_status(chat_id):
+    """Получает фактический статус Mineflayer бота с Worker Service."""
+    try:
+        response = requests.get(f"{WORKER_API_URL}/api/status/{chat_id}", timeout=5)
+        if response.status_code == 200:
+            return response.json().get("isRunning", False)
+    except requests.exceptions.RequestException:
+        pass
+    return False
+
+
+async def start_worker_bot(chat_id, host, port, username):
+    """Отправляет команду на запуск Mineflayer-Worker."""
+    data = get_user_data(chat_id)
+    chat_id_str = str(chat_id)
+    
+    if host is None or port is None:
+        return False, "⚠️ \\*Ошибка конфигурации\\*\\: Адрес сервера не задан в настройках\\."
+
+    payload = {
+        "chatId": chat_id_str,
+        "host": host,
+        "port": port,
+        "username": username,
+        "version": data["version"] 
     }
 
-    const currentProxy = PROXY_LIST[currentIndex];
-    
-    console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username}, Version=${version} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
-
-    const bot = mineflayer.createBot({
-        host: host, 
-        port: parseInt(port), 
-        username: username,
-        version: version, // Использование динамической версии
-        
-        proxy: {
-            host: currentProxy.host,
-            port: currentProxy.port,
-            type: 5 
-        }
-    });
-
-    data.bot = bot; 
-    
-    bot.on('login', () => {
-        console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
-        sendNotification(chatId, `✅ Бот ${username} успешно подключился к ${host}:${port}`, 'MarkdownV2');
-        
-        if (activeBots[chatId]) {
-            activeBots[chatId].reconnectAttempts = 0; 
-            activeBots[chatId].currentProxyIndex = 0; 
-        }
-    });
-
-    bot.on('error', (err) => {
-        const errorMessage = err.message || 'Неизвестная ошибка подключения';
-        console.error(`[Chat ${chatId}] Ошибка бота: ${errorMessage}`);
-
-        const data = activeBots[chatId];
-        if (data) {
-            if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed') || errorMessage.includes('Failed to connect') || errorMessage.includes('EACCES')) {
-                 data.isProxyFailure = true; 
-            }
-            data.bot.quit('disconnect.error'); 
-        }
-    });
-
-    bot.on('end', (reason) => {
-        console.log(`[Chat ${chatId}] Бот отключен. Причина: ${reason}`);
-        
-        const data = activeBots[chatId];
-        if (!data) return; 
-        
-        if (data.isStopping) {
-            return cleanupBot(chatId);
-        }
-        
-        if (reason === 'disconnect.cleanup') {
-            return cleanupBot(chatId);
-        }
-
-        if (data.isProxyFailure || reason === 'socketClosed') { 
-            data.isProxyFailure = false; 
-            data.currentProxyIndex++;     
+    try:
+        response = requests.post(
+            f"{WORKER_API_URL}/api/start", 
+            json=payload, 
+            timeout=10 
+        )
+        if response.status_code == 200:
+            data["is_running"] = True
+            save_data()
+            return True, "✅ Команда запуска отправлена Worker\\-сервису\\."
+        else:
+            error_text = response.json().get('error', response.text)
+            logger.error(f"Worker START failed ({response.status_code}): {error_text}")
+            escaped_error = escape_markdown(error_text[:100])
             
-            if (data.currentProxyIndex < PROXY_LIST.length) {
-                const nextProxyIndex = data.currentProxyIndex;
-                sendNotification(chatId, `⚠️ Прокси не сработал\\. Попытка переподключения с ПРОКСИ №${nextProxyIndex + 1}/${PROXY_LIST.length}\\.`, 'MarkdownV2');
-
-                setTimeout(() => {
-                    console.log(`[Chat ${chatId}] Попытка переподключения с новым прокси...`);
-                    setupMineflayerBot(chatId, data.host, data.port, data.username, data.version); // Передаем версию
-                }, 5000);
-                return; 
-            } else {
-                sendNotification(chatId, `🛑 Бот отключен окончательно\\. Все ${PROXY_LIST.length} прокси были испробованы\\.`, 'MarkdownV2');
-                return cleanupBot(chatId);
-            }
-        }
-        
-        data.reconnectAttempts++;
-
-        if (data.reconnectAttempts < maxAttempts) {
-            sendNotification(chatId, `⚠️ Бот был отключен \\(${reason}\\)\\. Попытка переподключения \\(${data.reconnectAttempts}/${maxAttempts}\\)\\.\\.\\.`, 'MarkdownV2');
+            return False, f"❌ Ошибка запуска Worker'а: статус {response.status_code} \\({escaped_error}\.\.\.\\)"
             
-            setTimeout(() => {
-                console.log(`[Chat ${chatId}] Попытка переподключения...`);
-                setupMineflayerBot(chatId, data.host, data.port, data.username, data.version); // Передаем версию
-            }, 5000 * data.reconnectAttempts); 
-        } else {
-            sendNotification(chatId, `🛑 Бот отключен окончательно \\(${reason}\\)\\. Достигнут лимит попыток переподключения\\.`, 'MarkdownV2');
-            cleanupBot(chatId);
-        }
-    });
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка при вызове Worker API (START): {e}")
+        return False, f"❌ Ошибка соединения с Worker'ом\\. Проверьте, запущен ли Worker\\."
+
+
+async def stop_worker_bot(chat_id):
+    """Останавливает Mineflayer-бота через Worker API."""
+    data = get_user_data(chat_id)
+    chat_id_str = str(chat_id)
     
-    bot.on('spawn', () => {
-        console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
-        sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`, 'MarkdownV2');
-    });
-}
+    if not data["is_running"]:
+        return True, "Бот уже остановлен\\."
 
-// --- API ЭНДПОИНТЫ ---
-
-app.get('/api/status/:chatId', (req, res) => {
-    // ❗❗❗ ЭТОТ МАРШРУТ БЫЛ ДОБАВЛЕН ❗❗❗
-    const chatId = req.params.chatId;
-    // Проверяем, существует ли бот, не является ли он 'null' и не находится ли в процессе остановки
-    const isRunning = !!activeBots[chatId] && !!activeBots[chatId].bot && !activeBots[chatId].isStopping;
-    res.status(200).send({ isRunning: isRunning });
-});
-
-app.post('/api/start', async (req, res) => {
-    const { chatId, host, port, username, version } = req.body; 
+    try:
+        response = requests.post(
+            f"{WORKER_API_URL}/api/stop", 
+            json={"chatId": chat_id_str}, 
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data["is_running"] = False
+            save_data()
+            return True, "⏹ Команда остановки отправлена Worker\\-сервису\\."
+        
+        else:
+            error_text = response.json().get('error', response.text)
+            logger.error(f"Worker STOP failed ({response.status_code}): {error_text}")
+            data["is_running"] = False
+            save_data()
+            
+            return False, (
+                f"❌ Ошибка остановки Worker'а: статус {response.status_code}\\. "
+                f"Локальный статус сброшен для возможности перезапуска\\."
+            )
     
-    if (!chatId || !host || !port || !username || !version) {
-        return res.status(400).send({ error: "Missing required parameters: chatId, host, port, username, or version." });
-    }
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка при вызове Worker API (STOP): {e}")
+        data["is_running"] = False
+        save_data()
+        return False, f"❌ Ошибка соединения с Worker'ом\\. Проверьте WORKER\\_API\\_URL\\."
+
+
+# ----------------------------------------------------------------------
+#                               HANDLERS
+# ----------------------------------------------------------------------
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отображает главное меню."""
+    if update.effective_chat:
+        chat_id = update.effective_chat.id
+    elif update.callback_query and update.callback_query.message:
+        chat_id = update.callback_query.message.chat_id
+    else:
+        logger.error("Не удалось определить chat_id для start_command.")
+        return
+        
+    data = get_user_data(chat_id)
     
-    try {
-        if (activeBots[chatId]) {
-            activeBots[chatId].reconnectAttempts = 0;
-            activeBots[chatId].currentProxyIndex = 0; 
-            activeBots[chatId].isStopping = false; 
-        }
-        await setupMineflayerBot(chatId, host, port, username, version);
-        res.status(200).send({ message: "Bot start command received." });
-    } catch (e) {
-        res.status(500).send({ error: e.message });
-    }
-});
-
-app.post('/api/stop', (req, res) => {
-    const { chatId } = req.body; 
-    if (!chatId) {
-        return res.status(400).send({ error: "Missing required parameter: chatId." });
-    }
-
-    if (activeBots[chatId] && activeBots[chatId].bot) {
-        activeBots[chatId].isStopping = true; 
-        activeBots[chatId].bot.quit('disconnect.quitting');
-        res.status(200).send({ message: "Bot stop command received. Disconnecting." });
-    } else {
-        res.status(404).send({ message: "Bot not found or not running for this chat." });
-        cleanupBot(chatId); 
-    }
-});
-
-app.post('/api/command', (req, res) => {
-    const { chatId, command } = req.body;
+    data["is_running"] = await get_worker_status(chat_id)
+    save_data()
     
-    if (!chatId || !command) {
-        return res.status(400).send({ error: "Missing required parameters: chatId or command." });
-    }
+    # ЛОГИКА УПРАВЛЕНИЯ KICKSTAND УДАЛЕНА
+    
+    status_text = '🟢 Подключен' if data["is_running"] else '🔴 Отключен'
+    notif_status = 'Включены \\(🔔\\)' if data["send_notifications"] else 'Выключены \\(🔕\\)' 
+    
+    escaped_host = escape_markdown(data["host"]) if data["host"] else 'Не задан'
+    escaped_username = escape_markdown(data["username"])
+    escaped_api_url = escape_markdown(WORKER_API_URL) 
+    
+    server_text = f"{escaped_host}:{data['port']}" if data["host"] else 'Не задан' 
+    version_text = escape_markdown(data["version"])
 
-    if (activeBots[chatId] && activeBots[chatId].bot) {
-        try {
-            activeBots[chatId].bot.chat(command);
-            res.status(200).send({ message: `Command '${command}' sent to bot.` });
-        } catch (e) {
-            console.error(`[Chat ${chatId}] Failed to send command: ${e.message}`);
-            res.status(500).send({ error: `Failed to send command: ${e.message}` });
-        }
-    } else {
-        res.status(404).send({ message: "Bot not found or not running." });
-    }
-});
+    message_text = (
+        f"⚙️ \\*Панель управления ботом\\*\n\n"
+        f"Статус: \\*{status_text}\\*\n"
+        f"Сервер: \\*{server_text}\\*\n"
+        f"Версия: \\*{version_text}\\*\n"
+        f"Имя бота: \\*{escaped_username}\\*\n"
+        f"Уведомления: \\*{notif_status}\\*\n\n"
+        f"\\_Worker API: {escaped_api_url}\\_"
+    )
+    
+    reply_markup = get_main_menu_keyboard(data["username"], data["send_notifications"], data["is_running"])
+    
+    if update.callback_query and update.callback_query.message:
+        try:
+            await update.callback_query.edit_message_text(message_text, parse_mode='MarkdownV2', reply_markup=reply_markup)
+        except Exception:
+            # Отправка нового сообщения в случае ошибки редактирования
+            await update.callback_query.message.reply_text(message_text, parse_mode='MarkdownV2', reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(message_text, parse_mode='MarkdownV2', reply_markup=reply_markup)
 
-app.listen(PORT, () => {
-    console.log(`Worker service running on port ${PORT}`);
-});
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat_id
+    data = get_user_data(chat_id)
+    
+    action = query.data
+
+    if action == "start_bot":
+        if data["is_running"]:
+            await query.message.reply_text("Бот уже запущен\\.", parse_mode='MarkdownV2')
+            await start_command(update, context) 
+            return
+            
+        if data["host"] is None or data["port"] is None:
+            await query.message.reply_text("⚠️ Сначала задайте адрес сервера через **⚙️ Сменить сервер** или команду `/setserver`\\.", parse_mode='MarkdownV2')
+            await start_command(update, context)
+            return
+
+        escaped_username = escape_markdown(data['username'])
+        await query.edit_message_text(f"Запускаю Minecraft бота \\*{escaped_username}\\* через Worker\\.\\.\\.", parse_mode='MarkdownV2')
+        
+        success, message = await start_worker_bot(chat_id, data["host"], data["port"], data["username"])
+        
+        # ЛОГИКА ЗАПУСКА KICKSTAND УДАЛЕНА
+            
+        await query.message.reply_text(message, parse_mode='MarkdownV2')
+        await start_command(update, context) 
+
+    elif action == "stop_bot":
+        if not data["is_running"]:
+            await query.message.reply_text("Бот уже остановлен\\.", parse_mode='MarkdownV2')
+            await start_command(update, context)
+            return
+
+        # ЛОГИКА ОСТАНОВКИ KICKSTAND УДАЛЕНА
+        
+        await query.edit_message_text("Отправляю команду на остановку Minecraft бота\\.\\.\\.")
+        success, message = await stop_worker_bot(chat_id)
+        
+        await query.message.reply_text(message, parse_mode='MarkdownV2')
+        await start_command(update, context) 
+
+    elif action == "set_server_prompt":
+        escaped_example = escape_markdown("test.aternos.me:17484")
+        await query.edit_message_text(
+            f'💬 Отправьте адрес сервера в формате: `/setserver домен:порт` \\(например: `/setserver {escaped_example}`\\)', 
+            parse_mode='MarkdownV2',
+            reply_markup=None
+        )
+
+    elif action == "set_version_prompt":
+        escaped_example = escape_markdown("1.20.1")
+        await query.edit_message_text(
+            f'💬 Отправьте версию сервера в формате: `/setversion N.N.N` \\(например: `/setversion {escaped_example}`\\)', 
+            parse_mode='MarkdownV2',
+            reply_markup=None
+        )
+
+    elif action == "set_username_prompt":
+        data["awaiting_username"] = True
+        save_data()
+        await query.edit_message_text(
+            '💬 \\*Отправьте новое имя\\* для Minecraft бота\\. \\(Имя должно быть от 3 до 16 символов без пробелов\\)', 
+            parse_mode='MarkdownV2',
+            reply_markup=None
+        )
+        
+    elif action == "send_command_prompt":
+        if not data["is_running"]:
+            await query.message.reply_text("❌ Бот не запущен, команды не могут быть отправлены\\.", parse_mode='MarkdownV2')
+            await start_command(update, context)
+            return
+            
+        data["awaiting_command"] = True
+        save_data()
+        await query.edit_message_text(
+            '💬 \\*Отправьте команду\\* для выполнения в Minecraft чате \\(например, `/say Привет` или `/op ВашеИмя`\\)\\.', 
+            parse_mode='MarkdownV2',
+            reply_markup=None
+        )
+
+    elif action == "toggle_notifications":
+        is_on = data.get("send_notifications", True)
+        data["send_notifications"] = not is_on
+        status = 'ВКЛЮЧЕНЫ \\(🔔\\)' if data["send_notifications"] else 'ВЫКЛЮЧЕНЫ \\(🔕\\)'
+        save_data()
+        
+        await query.message.reply_text(f"✅ Уведомления успешно \\*{status}\\*", parse_mode='MarkdownV2')
+        
+        await start_command(update, context)
+
+    elif action == "refresh_status":
+        await query.edit_message_text("⏳ Проверяю статус Mineflayer бота на Worker Service\.\.\.", parse_mode='MarkdownV2', reply_markup=None)
+        
+        data["is_running"] = await get_worker_status(chat_id)
+        
+        # ЛОГИКА УПРАВЛЕНИЯ KICKSTAND УДАЛЕНА
+            
+        save_data()
+        
+        await start_command(update, context) 
+
+
+async def setserver_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    data = get_user_data(chat_id)
+    
+    if not context.args:
+        await update.message.reply_text("❌ Неверный формат\\. Используйте: `/setserver домен:порт`", parse_mode='MarkdownV2')
+        await start_command(update, context)
+        return
+
+    full_address = context.args[0].strip()
+    parts = full_address.split(':')
+    
+    if len(parts) == 2 and parts[1].isdigit():
+        data["host"] = parts[0].strip()
+        data["port"] = int(parts[1].strip())
+        
+        escaped_host = escape_markdown(data["host"])
+        
+        await update.message.reply_text(f"✅ Сервер установлен: \\*{escaped_host}:{data['port']}\\*\\.", parse_mode='MarkdownV2')
+        
+        if data["is_running"]:
+            # ЛОГИКА ОСТАНОВКИ KICKSTAND УДАЛЕНА
+            await stop_worker_bot(chat_id)
+            await update.message.reply_text('🔄 Бот остановлен для применения новых настроек\\. Запустите его снова через /menu\\.', parse_mode='MarkdownV2')
+        
+        save_data()
+        
+        await start_command(update, context)
+    else:
+        await update.message.reply_text("❌ Неверный формат\\. Используйте: `/setserver домен:порт`", parse_mode='MarkdownV2')
+        await start_command(update, context)
+
+
+async def setversion_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Устанавливает версию Minecraft через команду."""
+    chat_id = update.effective_chat.id
+    data = get_user_data(chat_id)
+    
+    if not context.args:
+        # Если аргументов нет, просим пользователя ввести версию
+        escaped_example = escape_markdown("1.20.1")
+        await update.message.reply_text(
+            f"💬 Отправьте версию сервера в формате: `/setversion N.N.N` \\(например: `/setversion {escaped_example}`\\)", 
+            parse_mode='MarkdownV2'
+        )
+        return
+
+    new_version = context.args[0].strip()
+    
+    if not new_version:
+        await update.message.reply_text("❌ Версия не может быть пустой\\.", parse_mode='MarkdownV2')
+        return
+
+    data["version"] = new_version
+    
+    escaped_version = escape_markdown(data["version"])
+    
+    await update.message.reply_text(f"✅ Версия Minecraft установлена: \\*{escaped_version}\\*\\.", parse_mode='MarkdownV2')
+    
+    if data["is_running"]:
+        # ЛОГИКА ОСТАНОВКИ KICKSTAND УДАЛЕНА
+        await stop_worker_bot(chat_id)
+        await update.message.reply_text('🔄 Бот остановлен для применения новой версии\\. Запустите его снова через /menu\\.', parse_mode='MarkdownV2')
+    
+    save_data()
+    
+    await start_command(update, context)
+
+
+async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    text = update.message.text
+    data = get_user_data(chat_id)
+    
+    if not text:
+        return
+        
+    text = text.strip() 
+    
+    # Игнорируем команды Telegram, чтобы не мешать /start, /setserver и т.д.
+    if text.startswith('/'):
+        return
+        
+    # 1. --- Обработка ввода имени пользователя ---
+    if data.get("awaiting_username"):
+        new_username = text
+        
+        if len(new_username) > 16 or len(new_username) < 3 or ' ' in new_username:
+            await update.message.reply_text('❌ Имя должно быть от 3 до 16 символов и не содержать пробелов\\. Попробуйте снова\\.', parse_mode='MarkdownV2')
+            return
+        
+        data["username"] = new_username
+        data["awaiting_username"] = False
+        save_data()
+        
+        escaped_username = escape_markdown(data["username"])
+        
+        if data["is_running"]:
+            # ЛОГИКА ОСТАНОВКИ KICKSTAND УДАЛЕНА
+            await stop_worker_bot(chat_id)
+            await update.message.reply_text(f"✅ Имя бота успешно изменено на \\*{escaped_username}\\*\\. Бот был остановлен\\. Запустите его снова через /menu\\.", parse_mode='MarkdownV2')
+        else:
+            await update.message.reply_text(f"✅ Имя бота успешно изменено на \\*{escaped_username}\\*\\.", parse_mode='MarkdownV2')
+
+        await start_command(update, context)
+        return
+
+    # 2. --- Обработка ввода команды (после нажатия кнопки) ---
+    if data.get("awaiting_command"):
+        if not data["is_running"]:
+            await update.message.reply_text("❌ Бот не запущен, команда не может быть отправлена\\. Запустите его через /menu\\.", parse_mode='MarkdownV2')
+            data["awaiting_command"] = False
+            save_data()
+            await start_command(update, context)
+            return
+
+        command = text
+        try:
+            requests.post(f"{WORKER_API_URL}/api/command", json={"chatId": str(chat_id), "command": command}, timeout=5).raise_for_status()
+            
+            data["awaiting_command"] = False
+            save_data()
+            await update.message.reply_text(f"✅ Команда `{escape_markdown(command)}` отправлена боту\\.", parse_mode='MarkdownV2')
+            await start_command(update, context)
+            
+        except requests.exceptions.RequestException as e:
+            error_message = str(e)
+            data["awaiting_command"] = False
+            save_data()
+            await update.message.reply_text(f"❌ Ошибка при отправке команды боту: `{escape_markdown(error_message)}`\\.", parse_mode='MarkdownV2')
+            await start_command(update, context)
+        
+        return
+            
+    # 3. --- Общая пересылка сообщений (Чат) ---
+        
+    if data["is_running"]:
+        try:
+            # Пересылаем сообщение как команду для бота (для чата)
+            requests.post(f"{WORKER_API_URL}/api/command", json={"chatId": str(chat_id), "command": text}, timeout=5).raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка при отправке команды чата боту: {e}")
+    else:
+        # Бот не запущен, а это не команда и не ожидаемый ввод
+        await update.message.reply_text("🤖 Бот не запущен\\. Запустите его через /menu\\.", parse_mode='MarkdownV2')
+
+# ----------------------------------------------------------------------
+#                             ТОЧКА ВХОДА (POLLING)
+# ----------------------------------------------------------------------
+
+def main():
+    """Основная функция запуска бота в режиме Polling."""
+    global tg_app
+    
+    load_data()
+
+    # ИНИЦИАЛИЗАЦИЯ JobQueue УДАЛЕНА
+    tg_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    tg_app.add_handler(CommandHandler(["start", "menu"], start_command))
+    tg_app.add_handler(CommandHandler("setserver", setserver_command))
+    tg_app.add_handler(CommandHandler("setversion", setversion_command))
+    tg_app.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Обработчик текстовых сообщений, исключая команды Telegram
+    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
+
+    logger.info("Бот запущен в режиме Polling.")
+    
+    tg_app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == '__main__':
+    main()
