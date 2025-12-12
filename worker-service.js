@@ -1,7 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
-const mineflayer_forge = require('mineflayer-forge'); // <--- Импорт плагина для Forge
+const mineflayer_forge = require('mineflayer-forge'); // Импорт плагина для Forge
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -107,7 +107,7 @@ async function fetchAndParseProxyList() {
 }
 
 // --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
-async function setupMineflayerBot(chatId, host, port, username, version, serverType = 'vanilla') { // <--- Принимаем serverType
+async function setupMineflayerBot(chatId, host, port, username, version, serverType = 'vanilla') { 
     const maxAttempts = 5; 
 
     if (PROXY_LIST.length === 0) {
@@ -127,20 +127,18 @@ async function setupMineflayerBot(chatId, host, port, username, version, serverT
     }
 
     if (!data) {
-        data = { bot: null, host, port, username, version, serverType, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false, isStopping: false, restartTimer: null }; // <--- Добавили restartTimer
+        data = { bot: null, host, port, username, version, serverType, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false, isStopping: false, restartTimer: null }; 
         activeBots[chatId] = data;
     } else {
-        // Обновляем настройки
         data.host = host;
         data.port = port;
         data.username = username;
         data.version = version; 
-        data.serverType = serverType; // <--- Сохраняем serverType
+        data.serverType = serverType; 
         data.bot = null;
         data.isStopping = false; 
     }
 
-    // Очищаем старый таймер перед запуском
     if (data.restartTimer) {
         clearTimeout(data.restartTimer);
         data.restartTimer = null;
@@ -176,10 +174,9 @@ async function setupMineflayerBot(chatId, host, port, username, version, serverT
 
     // --- ЛОГИКА ПОДКЛЮЧЕНИЯ К МОДОВЫМ СЕРВЕРАМ ---
     if (serverType === 'forge') {
-        bot.loadPlugin(mineflayer_forge); // Загружаем плагин Forge, чтобы обойти проверку модов
+        bot.loadPlugin(mineflayer_forge); // Загружаем плагин Forge
         console.log(`[Chat ${chatId}] Загружен плагин mineflayer-forge.`);
     }
-    // Для Fabric часто достаточно ванильного протокола, но может потребоваться отдельный плагин, если возникнут проблемы.
     // ---------------------------------------------
     
     bot.on('login', () => {
@@ -195,7 +192,6 @@ async function setupMineflayerBot(chatId, host, port, username, version, serverT
             if (data && data.bot) {
                 data.restartTimer = setTimeout(() => {
                     console.log(`[Chat ${chatId}] Время превентивного перезапуска (8ч 50м). Отключение...`);
-                    // Используем отдельную причину, чтобы знать, что это не ошибка
                     data.bot.quit('disconnect.preventive_restart'); 
                     sendNotification(chatId, `🔄 **Превентивный перезапуск:** Бот отключается и переподключается, чтобы избежать автоматического бана каждые 9 часов\\.`, 'MarkdownV2');
                 }, PREVENTIVE_RESTART_INTERVAL_MS);
@@ -246,13 +242,11 @@ async function setupMineflayerBot(chatId, host, port, username, version, serverT
         const data = activeBots[chatId];
         if (!data) return; 
         
-        // Очищаем таймер, если он был установлен (при отключении по любой причине)
         if (data.restartTimer) {
             clearTimeout(data.restartTimer);
             data.restartTimer = null;
         }
         
-        // Обработка фатальной ошибки, остановки, очистки или превентивного перезапуска
         if (data.isStopping || reason === 'disconnect.fatal_error' || reason === 'disconnect.cleanup' || reason === 'disconnect.quitting') {
             return cleanupBot(chatId);
         }
@@ -260,12 +254,10 @@ async function setupMineflayerBot(chatId, host, port, username, version, serverT
         // Специальная обработка превентивного перезапуска (запускаем без смены прокси)
         if (reason === 'disconnect.preventive_restart') {
             data.reconnectAttempts = 0; // Сбрасываем попытки
-            // Текущий прокси остается
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка превентивного переподключения...`);
-                // Рекурсивный вызов с текущими настройками
                 setupMineflayerBot(chatId, data.host, data.port, data.username, data.version, data.serverType); 
-            }, 10000); // 10 секунд на "остывание"
+            }, 10000); 
             return;
         }
 
@@ -319,7 +311,7 @@ app.get('/api/status/:chatId', (req, res) => {
 });
 
 app.post('/api/start', async (req, res) => {
-    const { chatId, host, port, username, version, serverType } = req.body; // <--- Принимаем serverType
+    const { chatId, host, port, username, version, serverType } = req.body; 
     
     if (!chatId || !host || !port || !username || !version) {
         return res.status(400).send({ error: "Missing required parameters: chatId, host, port, username, or version." });
@@ -331,7 +323,6 @@ app.post('/api/start', async (req, res) => {
             activeBots[chatId].currentProxyIndex = 0; 
             activeBots[chatId].isStopping = false; 
         }
-        // Передаем serverType в функцию запуска
         await setupMineflayerBot(chatId, host, port, username, version, serverType || 'vanilla'); 
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
