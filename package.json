@@ -10,6 +10,6 @@
     "mineflayer": "^4.20.1",
     "body-parser": "^1.20.2",
     "node-fetch": "^3.3.2",
-    "mineflayer-forge": "git+https://github.com/TheWebX/mine-flayer-forge.git#cursor"
+    "mineflayer-forge": "git+https://github.com/TheWebX/mine-flayer-forge.git#cursor/mineflayer-ai-gunner-for-hostile-mobs-8231"
   }
 }
