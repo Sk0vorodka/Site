@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser'); 
 const mineflayer = require('mineflayer');
+const mineflayer_forge = require('mineflayer-forge'); // <--- Импорт плагина для Forge
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -11,6 +12,11 @@ const TELEGRAM_TOKEN = '8596622001:AAE7NxgyUEQ-mZqTMolt7Kgs2ouM0QyjdIE';
 const BASE_TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 // ======================================================================
 
+// ----------------------------------------------------------------------
+// --- ПАРАМЕТРЫ ПРЕДОТВРАЩЕНИЯ БАНА ---
+// Таймер установлен на 8 часов 50 минут (530 минут * 60 сек * 1000 мс)
+const PREVENTIVE_RESTART_INTERVAL_MS = 530 * 60 * 1000; 
+// ----------------------------------------------------------------------
 
 // ----------------------------------------------------------------------
 // --- КОНФИГУРАЦИЯ ПРОКСИ ---
@@ -50,11 +56,9 @@ async function sendNotification(chatId, message) {
     }
 
     try {
-        // Динамический импорт node-fetch
         const { default: fetch } = await import('node-fetch'); 
         if (!TELEGRAM_TOKEN) return console.error(`[Chat ${chatId}] Ошибка: TELEGRAM_TOKEN не установлен.`);
         
-        // Экранирование для MarkdownV2
         const escapedMessage = message.replace(/[().!]/g, '\\$&');
 
         const url = `${BASE_TELEGRAM_URL}/sendMessage`;
@@ -70,7 +74,6 @@ async function sendNotification(chatId, message) {
             body: JSON.stringify(payload)
         });
         
-        // Попытка отправить как обычный текст, если MarkdownV2 не сработал
         if (!response.ok && response.status === 400) {
             console.warn(`[Chat ${chatId}] Ошибка MarkdownV2, отправляю обычный текст.`);
             const plainPayload = { chat_id: chatId, text: `[RAW] ${message}` };
@@ -86,7 +89,12 @@ async function sendNotification(chatId, message) {
 }
 
 function cleanupBot(chatId) {
-    if (activeBots[chatId]) {
+    const data = activeBots[chatId];
+    if (data) {
+        if (data.restartTimer) {
+            clearTimeout(data.restartTimer); // Очищаем таймер перезапуска
+            data.restartTimer = null;
+        }
         console.log(`[Chat ${chatId}] Ресурсы бота очищены.`);
         delete activeBots[chatId];
     }
@@ -98,8 +106,8 @@ async function fetchAndParseProxyList() {
     return []; 
 }
 
-// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER (С ИСПРАВЛЕННОЙ ОБРАБОТКОЙ ОШИБОК) ---
-async function setupMineflayerBot(chatId, host, port, username, version) {
+// --- ОСНОВНАЯ ЛОГИКА MINEFLAYER ---
+async function setupMineflayerBot(chatId, host, port, username, version, serverType = 'vanilla') { // <--- Принимаем serverType
     const maxAttempts = 5; 
 
     if (PROXY_LIST.length === 0) {
@@ -119,15 +127,23 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
     }
 
     if (!data) {
-        data = { bot: null, host, port, username, version, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false, isStopping: false };
+        data = { bot: null, host, port, username, version, serverType, reconnectAttempts: 0, currentProxyIndex: 0, isProxyFailure: false, isStopping: false, restartTimer: null }; // <--- Добавили restartTimer
         activeBots[chatId] = data;
     } else {
+        // Обновляем настройки
         data.host = host;
         data.port = port;
         data.username = username;
         data.version = version; 
+        data.serverType = serverType; // <--- Сохраняем serverType
         data.bot = null;
         data.isStopping = false; 
+    }
+
+    // Очищаем старый таймер перед запуском
+    if (data.restartTimer) {
+        clearTimeout(data.restartTimer);
+        data.restartTimer = null;
     }
 
     const currentIndex = data.currentProxyIndex;
@@ -141,7 +157,7 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
 
     const currentProxy = PROXY_LIST[currentIndex];
     
-    console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username}, Version=${version} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
+    console.log(`[Chat ${chatId}] Запуск Mineflayer с: Host=${host}, Port=${port}, Username=${username}, Version=${version}, Type=${serverType} | ПРОКСИ: ${currentProxy.host}:${currentProxy.port} (№${currentIndex + 1}/${PROXY_LIST.length})`);
 
     const bot = mineflayer.createBot({
         host: host, 
@@ -157,6 +173,14 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
     });
 
     data.bot = bot; 
+
+    // --- ЛОГИКА ПОДКЛЮЧЕНИЯ К МОДОВЫМ СЕРВЕРАМ ---
+    if (serverType === 'forge') {
+        bot.loadPlugin(mineflayer_forge); // Загружаем плагин Forge, чтобы обойти проверку модов
+        console.log(`[Chat ${chatId}] Загружен плагин mineflayer-forge.`);
+    }
+    // Для Fabric часто достаточно ванильного протокола, но может потребоваться отдельный плагин, если возникнут проблемы.
+    // ---------------------------------------------
     
     bot.on('login', () => {
         console.log(`[Chat ${chatId}] Бот ${username} подключился к ${host}:${port}`);
@@ -165,10 +189,21 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
         if (activeBots[chatId]) {
             activeBots[chatId].reconnectAttempts = 0; 
             activeBots[chatId].currentProxyIndex = 0; 
+
+            // --- УСТАНОВКА ТАЙМЕРА ПРЕДОТВРАЩЕНИЯ БАНА ---
+            const data = activeBots[chatId];
+            if (data && data.bot) {
+                data.restartTimer = setTimeout(() => {
+                    console.log(`[Chat ${chatId}] Время превентивного перезапуска (8ч 50м). Отключение...`);
+                    // Используем отдельную причину, чтобы знать, что это не ошибка
+                    data.bot.quit('disconnect.preventive_restart'); 
+                    sendNotification(chatId, `🔄 **Превентивный перезапуск:** Бот отключается и переподключается, чтобы избежать автоматического бана каждые 9 часов\\.`, 'MarkdownV2');
+                }, PREVENTIVE_RESTART_INTERVAL_MS);
+            }
+            // ----------------------------------------------
         }
     });
 
-    // --- ОБРАБОТКА ОШИБОК ---
     bot.on('error', (err) => {
         const errorMessage = err.message || 'Неизвестная ошибка подключения';
         console.error(`[Chat ${chatId}] Ошибка бота: ${errorMessage}`);
@@ -176,11 +211,10 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
         const data = activeBots[chatId];
         if (!data) return;
 
-        // --- УСИЛЕННАЯ ПРОВЕРКА ФАТАЛЬНЫХ ОШИБОК (Сервер недоступен) ---
         const fatalErrorKeywords = [
-            'ECONNREFUSED',  // Соединение отказано (сервер выключен)
-            'EHOSTUNREACH',  // Хост недоступен
-            'ENOTFOUND'      // Домен не найден
+            'ECONNREFUSED',  
+            'EHOSTUNREACH',  
+            'ENOTFOUND'      
         ];
 
         let isFatalError = false;
@@ -192,17 +226,14 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
         }
         
         if (isFatalError) {
-             // 1. Отправляем явное уведомление об ошибке
             sendNotification(chatId, `❌ **КРИТИЧЕСКАЯ ОШИБКА ПОДКЛЮЧЕНИЯ.**\nСервер \\*${data.host}:${data.port}\\* недоступен или не существует\\.\nОшибка: \`${errorMessage.substring(0, 100)}\\.\.\`\\.\n\\(Переподключение невозможно\\)`, 'MarkdownV2');
             
-            // 2. Явно завершаем и очищаем ресурсы
-            data.isStopping = true; // Помечаем как остановку
+            data.isStopping = true; 
             data.bot.quit('disconnect.fatal_error'); 
             cleanupBot(chatId);
-            return; // Завершаем функцию, чтобы не попасть в end/retry
+            return; 
         }
 
-        // Если ошибка не фатальна, проверяем на ошибку прокси/сокета/таймаут
         if (errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('socketClosed') || errorMessage.includes('Failed to connect') || errorMessage.includes('EACCES') || errorMessage.includes('Proxy authentication failed')) {
             data.isProxyFailure = true; 
         }
@@ -215,11 +246,29 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
         const data = activeBots[chatId];
         if (!data) return; 
         
-        // Обработка фатальной ошибки, остановки или очистки
+        // Очищаем таймер, если он был установлен (при отключении по любой причине)
+        if (data.restartTimer) {
+            clearTimeout(data.restartTimer);
+            data.restartTimer = null;
+        }
+        
+        // Обработка фатальной ошибки, остановки, очистки или превентивного перезапуска
         if (data.isStopping || reason === 'disconnect.fatal_error' || reason === 'disconnect.cleanup' || reason === 'disconnect.quitting') {
             return cleanupBot(chatId);
         }
         
+        // Специальная обработка превентивного перезапуска (запускаем без смены прокси)
+        if (reason === 'disconnect.preventive_restart') {
+            data.reconnectAttempts = 0; // Сбрасываем попытки
+            // Текущий прокси остается
+            setTimeout(() => {
+                console.log(`[Chat ${chatId}] Попытка превентивного переподключения...`);
+                // Рекурсивный вызов с текущими настройками
+                setupMineflayerBot(chatId, data.host, data.port, data.username, data.version, data.serverType); 
+            }, 10000); // 10 секунд на "остывание"
+            return;
+        }
+
         // Обработка сбоя прокси/сокета -> смена прокси
         if (data.isProxyFailure || reason === 'socketClosed') { 
             data.isProxyFailure = false; 
@@ -231,7 +280,7 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
 
                 setTimeout(() => {
                     console.log(`[Chat ${chatId}] Попытка переподключения с новым прокси...`);
-                    setupMineflayerBot(chatId, data.host, data.port, data.username, data.version); 
+                    setupMineflayerBot(chatId, data.host, data.port, data.username, data.version, data.serverType); 
                 }, 5000);
                 return; 
             } else {
@@ -248,19 +297,16 @@ async function setupMineflayerBot(chatId, host, port, username, version) {
             
             setTimeout(() => {
                 console.log(`[Chat ${chatId}] Попытка переподключения...`);
-                setupMineflayerBot(chatId, data.host, data.port, data.username, data.version); 
+                setupMineflayerBot(chatId, data.host, data.port, data.username, data.version, data.serverType); 
             }, 5000 * data.reconnectAttempts); 
         } else {
             sendNotification(chatId, `🛑 Бот отключен окончательно \\(${reason}\\)\\. Достигнут лимит попыток переподключения\\.`, 'MarkdownV2');
             cleanupBot(chatId);
         }
     });
-    // --- КОНЕЦ ОБРАБОТКИ ОШИБОК ---
     
     bot.on('spawn', () => {
         console.log(`[Chat ${chatId}] Бот заспавнился. Готов к работе.`);
-        sendNotification(chatId, `🌍 Бот заспавнился и готов к работе\\.`, 'MarkdownV2');
-        // Здесь можно добавить вашу собственную логику Anti-AFK через команды, если нужно
     });
 }
 
@@ -273,7 +319,7 @@ app.get('/api/status/:chatId', (req, res) => {
 });
 
 app.post('/api/start', async (req, res) => {
-    const { chatId, host, port, username, version } = req.body; 
+    const { chatId, host, port, username, version, serverType } = req.body; // <--- Принимаем serverType
     
     if (!chatId || !host || !port || !username || !version) {
         return res.status(400).send({ error: "Missing required parameters: chatId, host, port, username, or version." });
@@ -285,7 +331,8 @@ app.post('/api/start', async (req, res) => {
             activeBots[chatId].currentProxyIndex = 0; 
             activeBots[chatId].isStopping = false; 
         }
-        await setupMineflayerBot(chatId, host, port, username, version);
+        // Передаем serverType в функцию запуска
+        await setupMineflayerBot(chatId, host, port, username, version, serverType || 'vanilla'); 
         res.status(200).send({ message: "Bot start command received." });
     } catch (e) {
         res.status(500).send({ error: e.message });
@@ -317,7 +364,6 @@ app.post('/api/command', (req, res) => {
 
     if (activeBots[chatId] && activeBots[chatId].bot) {
         try {
-            // Отправляем команду в чат Mineflayer
             activeBots[chatId].bot.chat(command);
             res.status(200).send({ message: `Command '${command}' sent to bot.` });
         } catch (e) {
